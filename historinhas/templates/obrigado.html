@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Obrigado! · {{ settings.site_name }}{% endblock %}
+{% block head %}{% if order.status == 'pending' %}<meta http-equiv="refresh" content="10">{% endif %}{% endblock %}
+{% block content %}
+<div class="wrap narrow" style="padding:30px 16px 60px">
+  <div class="card center">
+    {% if order.status == 'approved' %}
+      <h1>Pagamento confirmado! 🎉</h1>
+      <p>As histórias de <b>{{ order.child_name }}</b> estão garantidas. Se esta é a primeira compra, a primeira
+        história já está sendo escrita e ilustrada e chega no seu e-mail em alguns minutos.</p>
+      <p><a class="btn" href="/conta/{{ order.customer_token }}">Ir para minha conta</a></p>
+      <p class="hint">Guarde o e-mail de boas-vindas: ele tem o link da sua conta.</p>
+    {% elif order.status == 'pending' %}
+      <h1>Aguardando o pagamento...</h1>
+      <p>Assim que o Mercado Pago confirmar (no Pix costuma ser na hora), esta página atualiza sozinha e você
+        recebe um e-mail.</p>
+      <p class="hint">Pagou com boleto? A confirmação pode levar até 2 dias úteis.</p>
+    {% else %}
+      <h1>O pagamento não foi concluído</h1>
+      <p>Nada foi cobrado. Você pode tentar de novo com outra forma de pagamento.</p>
+      <p><a class="btn" href="/assinar">Tentar de novo</a></p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

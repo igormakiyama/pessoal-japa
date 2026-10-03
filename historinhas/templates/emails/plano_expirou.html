@@ -1,0 +1,7 @@
+{% extends "emails/_base.html" %}
+{% block body %}
+<p>Olá!</p>
+<p>O plano de <b>{{ row.child_name }}</b> terminou, e a próxima aventura está esperando para ser escrita. ✨</p>
+<p>Renove quando quiser: as histórias continuam de onde pararam, sem repetir as anteriores.</p>
+{% with url=account_url, label="Renovar as histórias" %}{% include "emails/_button.html" %}{% endwith %}
+{% endblock %}

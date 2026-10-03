@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Minha conta · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<div class="wrap narrow" style="padding-bottom:50px">
+  <h1>Olá, {{ customer.parent_name.split()[0] }}!</h1>
+  <p class="muted">Guarde o link desta página: ele é a chave da sua conta. Perdeu? Peça um novo em <a href="/entrar">Minha conta</a>.</p>
+  {% if request.query_params.get('salvo') %}<div class="notice">Dados salvos! Valem a partir da próxima história.</div>{% endif %}
+
+  {% if not subs %}
+  <div class="card"><p>Ainda não há assinaturas ativas. Se você acabou de pagar, aguarde alguns instantes e atualize a página.</p></div>
+  {% endif %}
+
+  {% for sub in subs %}
+  <div class="card" id="renovar">
+    <div class="sub-card">
+      <div>{{ sub.avatar|safe }}</div>
+      <div>
+        <h2 style="margin-bottom:4px">{{ sub.child_name }}</h2>
+        {% if sub.status == 'active' %}
+          <span class="status active">Ativa</span>
+          <p>Plano pago até <b>{{ sub.paid_until|date_br }}</b>. Próxima história: <b>{{ sub.next_story_at|date_br }}</b>.</p>
+        {% elif sub.status == 'expired' %}
+          <span class="status expired">Vencida</span>
+          <p>As histórias pararam em {{ sub.paid_until|date_br }}. Renove para continuar de onde parou.</p>
+        {% else %}
+          <span class="status canceled">Cancelada</span>
+        {% endif %}
+
+        {% if sub.status != 'canceled' %}
+        <form class="inline-form" method="post" action="/conta/{{ customer.token }}/renovar/{{ sub.id }}">
+          <select name="plan" aria-label="Plano">
+            {% for key, plan in plans.items() %}<option value="{{ key }}">{{ plan.name }} · {{ plan.price_cents|brl }}</option>{% endfor %}
+          </select>
+          <button class="btn small" type="submit">{{ 'Renovar' if sub.status == 'expired' else 'Adicionar mais tempo' }}</button>
+        </form>
+        <p style="margin:12px 0 0">
+          <a href="/conta/{{ customer.token }}/editar/{{ sub.child_id }}">Editar dados de {{ sub.child_name }}</a>
+        </p>
+        {% if sub.status == 'active' %}
+        <form method="post" action="/conta/{{ customer.token }}/lembretes/{{ sub.id }}" style="margin-top:8px">
+          <input type="hidden" name="enabled" value="{{ '0' if sub.reminders_enabled else '1' }}">
+          <button class="btn ghost small" type="submit">{{ 'Não quero renovar (parar lembretes)' if sub.reminders_enabled else 'Voltar a receber lembretes de renovação' }}</button>
+        </form>
+        {% endif %}
+        {% endif %}
+
+        <h3 style="margin-top:20px">Histórias</h3>
+        {% if not sub.stories %}<p class="muted">A primeira história está a caminho!</p>{% endif %}
+        <ul class="story-list">
+          {% for st in sub.stories %}
+          <li>
+            {% if st.status == 'ready' %}
+              <span><b>{{ st.title }}</b><br><small class="muted">{{ st.ready_at|date_br }}</small></span>
+              <a class="btn small secondary" href="/h/{{ st.token }}">Abrir</a>
+            {% else %}
+              <span class="muted">✨ Uma nova história está sendo criada...</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="card">
+    <h3>Novo filho ou filha?</h3>
+    <p>Faça uma nova assinatura com o mesmo e-mail e ela aparece aqui.</p>
+    <a class="btn secondary small" href="/assinar">Nova assinatura</a>
+  </div>
+
+  <details class="card">
+    <summary><b>Apagar meus dados</b></summary>
+    <p>Apaga seus dados, os dados das crianças e todas as histórias. Não dá para desfazer. Os registros de pagamento
+      ficam guardados de forma anônima, como exige a lei fiscal.</p>
+    <form method="post" action="/conta/{{ customer.token }}/apagar" class="inline-form">
+      <input type="text" name="confirm" placeholder="Digite APAGAR" aria-label="Confirmação">
+      <button class="btn small" type="submit" style="background:var(--danger);box-shadow:none">Apagar tudo</button>
+    </form>
+  </details>
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Minha conta · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<div class="wrap narrow" style="padding:30px 16px 60px">
+  <div class="card">
+    <h1>Acessar minha conta</h1>
+    {% if sent %}
+      <div class="notice">Se este e-mail tiver uma assinatura, enviamos agora um link de acesso. Confira também a caixa de spam.</div>
+    {% else %}
+      <p class="muted">Não usamos senha. Digite o e-mail da assinatura e mandamos um link de acesso.</p>
+    {% endif %}
+    <form method="post" action="/entrar">
+      <label for="email">E-mail</label>
+      <input type="email" id="email" name="email" required>
+      <p><button class="btn" type="submit">Receber link de acesso</button></p>
+    </form>
+  </div>
+</div>
+{% endblock %}

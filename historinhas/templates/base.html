@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ settings.site_name }} · Histórias personalizadas onde seu filho é o herói{% endblock %}</title>
+<meta name="description" content="Toda semana, uma história nova com o nome, o jeitinho e os gostos do seu filho. Com ilustrações e áudio narrado para a hora de dormir.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=2">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⭐</text></svg>">
+{% block head %}{% endblock %}
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <a class="logo" href="/">{{ settings.site_name }}<span>.</span></a>
+    <nav>
+      <a class="hide-sm" href="/exemplo">Ver exemplo</a>
+      <a class="hide-sm" href="/entrar">Minha conta</a>
+      <a class="btn small" href="/assinar">Assinar</a>
+    </nav>
+  </div>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>
+  <div class="wrap">
+    <span>© {{ settings.site_name }} · Histórias criadas com inteligência artificial e revisadas automaticamente.</span>
+    <span><a href="/termos">Termos</a> · <a href="/privacidade">Privacidade</a> · <a href="mailto:{{ settings.support_email }}">{{ settings.support_email }}</a></span>
+  </div>
+</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

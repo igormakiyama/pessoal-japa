@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>{{ story.titulo }}</title>
+<style>
+  @page { size: A5 landscape; margin: 0; }
+  body { margin: 0; font-family: "DejaVu Sans", sans-serif; color: #2D2A3E; }
+  .page { page-break-after: always; height: 148mm; position: relative; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+  .cover { background: #FFF4E0; text-align: center; }
+  .cover img { width: 150mm; margin-top: 10mm; border-radius: 6mm; }
+  .cover h1 { font-size: 22pt; margin: 6mm 12mm 2mm; color: #5B3E96; }
+  .cover p { font-size: 11pt; margin: 0; color: #7A6F8F; }
+  .scene { display: flex; }
+  .scene img { width: 105mm; height: 148mm; object-fit: cover; }
+  .scene .text { width: 105mm; padding: 14mm 12mm; font-size: 12.5pt; line-height: 1.55; box-sizing: border-box; background: #FFFDF8; }
+  .scene .num { color: #C9B8E8; font-size: 10pt; margin-bottom: 4mm; }
+  .end { background: #5B3E96; color: #FFFFFF; text-align: center; padding-top: 45mm; box-sizing: border-box; }
+  .end h2 { font-size: 26pt; margin: 0 0 6mm; }
+  .end p { font-size: 12pt; margin: 0 25mm; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <section class="page cover">
+    <img src="{{ images[0] }}" alt="">
+    <h1>{{ story.titulo }}</h1>
+    <p>Uma história feita especialmente para {{ child_name }} · {{ settings.site_name }}</p>
+  </section>
+  {% for scene in story.cenas %}
+  <section class="page scene">
+    <img src="{{ images[loop.index0] }}" alt="">
+    <div class="text">
+      <div class="num">{{ loop.index }} / {{ story.cenas|length }}</div>
+      {{ scene.texto }}
+    </div>
+  </section>
+  {% endfor %}
+  <section class="page end">
+    <h2>Fim</h2>
+    {% if story.licao %}<p>{{ story.licao }}</p>{% endif %}
+  </section>
+</body>
+</html>

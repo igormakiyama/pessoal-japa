@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Privacidade · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<div class="wrap narrow card" style="margin-bottom:50px">
+  <h1>Política de privacidade</h1>
+  <p class="muted">Modelo inicial. Revise com um profissional antes de vender.</p>
+
+  <h3>Quais dados coletamos</h3>
+  <p>Do responsável: nome e e-mail. Da criança: nome ou apelido, idade, gênero (opcional), características de
+    aparência escolhidas em uma lista (não pedimos fotos), gostos, temas e nome do bichinho de estimação.
+    Os dados de pagamento ficam com o Mercado Pago; não temos acesso ao número do seu cartão.</p>
+
+  <h3>Para que usamos</h3>
+  <p>Exclusivamente para criar e entregar as histórias, enviar avisos da assinatura e cumprir obrigações legais.
+    Não vendemos nem compartilhamos dados para publicidade.</p>
+
+  <h3>Dados de crianças (LGPD, art. 14)</h3>
+  <p>Tratamos dados de crianças somente com o consentimento do responsável, dado no momento da assinatura, e apenas
+    o mínimo necessário para personalizar as histórias.
+    {% if settings.llm_provider == 'ollama' %}As histórias são geradas por inteligência artificial que roda em nosso
+    próprio servidor; os dados não são enviados a empresas de IA de terceiros.{% else %}Para gerar o texto, nome,
+    idade e gostos da criança são enviados ao provedor de inteligência artificial contratado, que atua como operador
+    dos dados.{% endif %}</p>
+
+  <h3>Por quanto tempo guardamos</h3>
+  <p>Enquanto houver assinatura ou até você pedir a exclusão. Registros de pagamento são guardados pelo prazo exigido
+    pela legislação fiscal, sem os dados da criança.</p>
+
+  <h3>Seus direitos</h3>
+  <p>Você pode corrigir os dados na sua conta a qualquer momento e apagar tudo pelo botão “Apagar meus dados”.
+    Dúvidas: <a href="mailto:{{ settings.support_email }}">{{ settings.support_email }}</a>.</p>
+</div>
+{% endblock %}

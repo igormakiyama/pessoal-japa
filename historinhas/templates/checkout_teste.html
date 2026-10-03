@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Pagamento de teste · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<div class="wrap narrow" style="padding:30px 16px 60px">
+  <div class="card center">
+    <h1>Pagamento de teste</h1>
+    <p class="muted">O sistema está em <b>modo de teste</b> (PAYMENT_PROVIDER=fake). Nenhum dinheiro é cobrado.
+      Para cobrar de verdade, configure o Mercado Pago no arquivo <code>.env</code>.</p>
+    <p>Plano <b>{{ plan.name }}</b> · {{ order.amount_cents|brl }}</p>
+    <form method="post">
+      <button class="btn" type="submit">Simular pagamento aprovado</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
