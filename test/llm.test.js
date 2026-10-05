@@ -47,6 +47,9 @@ function mockFetch(handler) {
   };
 }
 
+// Parte da história que vai para o cliente (sem os campos internos com apelidos)
+const shown = ({ promptTitle, promptSummary, ...story }) => story;
+
 const completion = (data) => ({
   json: { choices: [{ message: { content: typeof data === 'string' ? data : JSON.stringify(data) } }] },
 });
@@ -395,7 +398,7 @@ test('apelido com diminutivo é recusado e pedido de novo', async () => {
     return completion(aliasStory({ extra: storyCount === 1 ? 'e o Zarikzinho dormiu.' : 'e dormiu.' }));
   });
   const story = await generateStory(CHILD, 'coragem', []);
-  assert.ok(!/zarik/i.test(JSON.stringify(story)));
+  assert.ok(!/zarik/i.test(JSON.stringify(shown(story))));
   const prompts = storyCalls().map(userPrompt);
   assert.equal(prompts.length, 2);
   assert.ok(prompts[1].includes('sem apelidos ou diminutivos'));
@@ -432,8 +435,11 @@ test('PRIVACIDADE: nenhum pedido à IA leva o nome real da criança ou do bichin
   assert.ok(prompt.includes('um personagem de desenho'));
   assert.ok(userPrompt(calls[1]).includes('escrita para Zarik'));
 
-  const json = JSON.stringify(story);
+  const json = JSON.stringify(shown(story));
   assert.equal(story.titulo, 'João e Pipoca no Mar');
+  // A versão com apelidos (para "histórias anteriores" nos próximos pedidos) não tem o nome real
+  assert.equal(story.promptTitle, 'Zarik e Zuzo no Mar');
+  assert.ok(!fold(story.promptSummary).includes('joao'));
   assert.ok(story.cenas.every((s) => s.texto.startsWith('João e Pipoca brincou.')));
   for (const alias of Object.values(ALIASES)) assert.ok(!json.includes(alias), `sobrou o apelido ${alias}`);
 });
@@ -446,7 +452,7 @@ test('PRIVACIDADE: nome real igual ao apelido usa o apelido reserva', async () =
   const story = await generateStory(zarina, 'coragem', []);
   for (const call of calls) assert.ok(!fold(call.raw).includes('zarina'));
   assert.equal(story.titulo, 'Zarina e a Lua');
-  assert.ok(!JSON.stringify(story).includes('Tavina'));
+  assert.ok(!JSON.stringify(shown(story)).includes('Tavina'));
 });
 
 // ---------------------------------------------------------------- demonstração
@@ -486,4 +492,36 @@ test('demo: tema desconhecido e frases sem pet continuam coerentes', () => {
   assert.ok(!/passaram|subiram|pousaram/.test(text), 'verbo no plural sem bichinho');
   assert.ok(text.includes('Alex subiu') && text.includes('Alex pousou'));
   assert.ok(story.licao.length > 10 && story.resumo.includes('Alex'));
+});
+
+test('PRIVACIDADE: diminutivos comuns e acentos raros também viram apelido', () => {
+  const cases = [
+    ['Carlos', 'o Carlinhos e os Carlinhos brincam'],
+    ['Marcos', 'o Marquinhos adora bola'],
+    ['Lucas', 'a Luquinhas? não, o Luquinhas'],
+    ['Luiz', 'o Luizinho dorme cedo'],
+    ['Luís', 'o Luisinho e o LUÍS'],
+    ['Beatriz', 'a Beatrizinha ama gatos'],
+    ['Isabel', 'a Isabelinha canta'],
+    ['Joaquim', 'o Joaquinzinho corre'],
+    ['Yūki', 'Yūki e Yuki gostam de trem'],
+    ['Kōji', 'Kōji (com acento separado) e Kōjizinho'],
+    ['Ana Clara', 'a Aninha, a Clarinha e a Ana Clara'],
+    ['Diego', 'o Dieguinho'],
+  ];
+  for (const [name, text] of cases) {
+    const out = hideNames(text, { name, gender: 'menino', pet_name: '' });
+    const tokens = fold(name).split(/\s+/).map((t) => t.slice(0, 4));
+    for (const token of tokens) assert.ok(!fold(out).includes(token), `${name}: sobrou em "${out}"`);
+  }
+});
+
+test('PRIVACIDADE: histórias anteriores vão com apelido mesmo depois de trocar o nome', async () => {
+  const renamed = { ...CHILD, name: 'Theozinho', pet_name: 'Rex', pet_type: 'cachorro' };
+  mockFetch((body) => (isReview(body) ? completion({ aprovada: true, problemas: [] }) : completion(aliasStory())));
+  // promptTitle/promptSummary guardados quando a criança ainda se chamava "Theo" e o cachorro "Bolinha"
+  await generateStory(renamed, 'coragem', [{ title: 'Zarik e Zuzo na Lua', summary: 'Zarik e Zuzo foram longe.' }]);
+  const prompt = fold(calls.map((c) => c.raw).join(' '));
+  assert.ok(prompt.includes('zarik e zuzo na lua'));
+  for (const real of ['theo', 'rex', 'bolinha']) assert.ok(!prompt.includes(real), real);
 });

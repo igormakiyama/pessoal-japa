@@ -1,12 +1,83 @@
 // Regras do negócio, usadas pelo site e pelo worker.
-import { config, plans } from './config.js';
+import fs from 'node:fs';
+
+import { config, paths, plans } from './config.js';
 import { sendTemplate } from './mailer.js';
-import { createCheckout, normalize, searchPayments } from './payments.js';
+import { PaymentError, createCheckout, normalize, searchPayments } from './payments.js';
 import { removeStoryFiles } from './pipeline.js';
 import { db } from './store.js';
 import { newToken, nowIso, parseIso, plusDays } from './util.js';
 
 const DAY = 86400000;
+const MINUTE = 60000;
+
+// ---------------------------------------------------------------- fila de e-mails
+// Todo e-mail entra numa fila no banco e é enviado em seguida; se o envio falhar
+// (Brevo fora do ar, chave errada...), tenta de novo com espera crescente.
+
+const EMAIL_BACKOFF_MINUTES = [1, 5, 15, 60, 180, 360, 720];
+const EMAIL_MAX_ATTEMPTS = EMAIL_BACKOFF_MINUTES.length + 1;
+let deliveryRun = null;
+let rerun = false;
+
+export function queueEmail(template, to, subject, ctx) {
+  const email = db().insert('emails', {
+    template, to, subject, ctx, status: 'pending', attempts: 0, nextAttemptAt: nowIso(),
+    lastError: null, createdAt: nowIso(), sentAt: null,
+  });
+  deliverPendingEmails().catch((err) => console.error('Falha na fila de e-mails:', err.message));
+  return email;
+}
+
+async function deliverDue(limit) {
+  const store = db();
+  const now = nowIso();
+  const due = store.filter('emails', (e) => e.status === 'pending' && e.nextAttemptAt <= now)
+    .sort((a, b) => a.id - b.id).slice(0, limit);
+  let sent = 0;
+  for (const email of due) {
+    try {
+      await sendTemplate(email.template, email.to, email.subject, email.ctx);
+      store.update('emails', email.id, { status: 'sent', sentAt: nowIso(), lastError: null });
+      sent += 1;
+    } catch (err) {
+      const attempts = email.attempts + 1;
+      const giveUp = attempts >= EMAIL_MAX_ATTEMPTS;
+      console.error(`E-mail ${email.id} (${email.template}) falhou na tentativa ${attempts}: ${err.message}`);
+      store.update('emails', email.id, {
+        attempts,
+        status: giveUp ? 'failed' : 'pending',
+        lastError: String(err.message || err).slice(0, 500),
+        nextAttemptAt: new Date(Date.now() + (EMAIL_BACKOFF_MINUTES[attempts - 1] || 720) * MINUTE).toISOString(),
+      });
+    }
+  }
+  return sent;
+}
+
+// Envia os e-mails da fila. Uma entrega por vez; o que entrar no meio sai na mesma rodada.
+export function deliverPendingEmails(limit = 20) {
+  if (deliveryRun) {
+    rerun = true;
+    return deliveryRun;
+  }
+  deliveryRun = (async () => {
+    let sent = 0;
+    do {
+      rerun = false;
+      sent += await deliverDue(limit);
+    } while (rerun);
+    return sent;
+  })().finally(() => {
+    deliveryRun = null;
+  });
+  return deliveryRun;
+}
+
+// E-mails com problema: falharam de vez ou já erraram 3 vezes seguidas.
+export function emailProblems() {
+  return db().filter('emails', (e) => e.status === 'failed' || (e.status === 'pending' && e.attempts >= 3));
+}
 
 // ---------------------------------------------------------------- cadastro e pedidos
 
@@ -46,6 +117,9 @@ export function updateChild(childId, child) {
 export async function createOrder(subscriptionId, planKey) {
   const store = db();
   const plan = plans()[planKey];
+  if (config.paymentProvider === 'mercadopago' && config.llmProvider === 'demo') {
+    throw new PaymentError('Vendas bloqueadas: a IA está em modo demonstração (falta LLM_API_KEY no .env.site).');
+  }
   const subscription = store.get('subscriptions', subscriptionId);
   const customer = store.get('customers', subscription.customerId);
   const order = store.insert('orders', {
@@ -68,6 +142,23 @@ export function applyPaymentSync(orderToken, paymentId, status, amountCents) {
     return { outcome: 'unknown_order' };
   }
   const sub = store.get('subscriptions', order.subscriptionId);
+  const customer = store.get('customers', sub.customerId);
+
+  // Dados apagados (LGPD): o pagamento fica registrado, mas nada é reativado. O admin é avisado para estornar.
+  if (sub.status === 'canceled' || customer.deletedAt) {
+    if (status === 'approved' && order.status !== 'approved') {
+      store.update('orders', order.id, { status: 'approved', paymentId, paidAt: nowIso(), note: 'pago depois de apagar os dados: estornar' });
+      if (config.adminEmail) {
+        queueEmail('alerta_admin', config.adminEmail, `[${config.siteName}] Pagamento recebido de conta apagada`, {
+          rows: [{ id: order.id, error: `Pedido ${order.id} (pagamento ${paymentId}) foi pago depois que o cliente apagou os dados. Faça o estorno no Mercado Pago.` }],
+          adminUrl: `${config.baseUrl}/admin`,
+        });
+      }
+      return { outcome: 'paid_after_delete' };
+    }
+    if (status === 'refunded' && order.status === 'approved') store.update('orders', order.id, { status: 'refunded' });
+    return { outcome: 'ignored' };
+  }
 
   if (status === 'approved' && (order.status === 'pending' || order.status === 'rejected')) {
     if (amountCents + 1 < order.amountCents) {
@@ -78,6 +169,8 @@ export function applyPaymentSync(orderToken, paymentId, status, amountCents) {
     const current = parseIso(sub.paidUntil);
     const base = current && current > now ? current : now;
     const wasActive = sub.status === 'active';
+    const paidBefore = store.find('orders', (o) => o.subscriptionId === sub.id && o.id !== order.id
+      && (o.status === 'approved' || o.status === 'refunded'));
     store.transaction(() => {
       store.update('orders', order.id, { status: 'approved', paymentId, paidAt: nowIso() });
       store.update('subscriptions', sub.id, {
@@ -87,7 +180,13 @@ export function applyPaymentSync(orderToken, paymentId, status, amountCents) {
         remindersEnabled: true,
       });
     });
-    return { outcome: 'activated', orderId: order.id, first: !wasActive };
+    return { outcome: 'activated', orderId: order.id, first: !paidBefore };
+  }
+
+  if (status === 'refunded' && order.status === 'approved' && paymentId !== order.paymentId) {
+    // Ex.: o cliente pagou duas vezes o mesmo checkout e o segundo pagamento foi estornado.
+    console.warn(`Estorno do pagamento ${paymentId} ignorado: o pedido ${orderToken} foi pago pelo ${order.paymentId}.`);
+    return { outcome: 'ignored' };
   }
 
   if (status === 'refunded' && order.status === 'approved') {
@@ -101,6 +200,11 @@ export function applyPaymentSync(orderToken, paymentId, status, amountCents) {
     return { outcome: 'refunded' };
   }
 
+  if (status === 'approved' && order.status === 'approved' && paymentId !== order.paymentId) {
+    console.warn(`Pagamento duplicado ${paymentId} para o pedido ${orderToken} (já pago por ${order.paymentId}). Considere estornar.`);
+    return { outcome: 'duplicate' };
+  }
+
   if (status === 'rejected' && order.status === 'pending') {
     store.update('orders', order.id, { status: 'rejected' });
     return { outcome: 'rejected' };
@@ -110,7 +214,7 @@ export function applyPaymentSync(orderToken, paymentId, status, amountCents) {
 
 export async function applyPayment(orderToken, paymentId, status, amountCents) {
   const result = applyPaymentSync(orderToken, paymentId, status, amountCents);
-  if (result.outcome === 'activated') await sendPaymentConfirmation(result.orderId, result.first);
+  if (result.outcome === 'activated') sendPaymentConfirmation(result.orderId, result.first);
   return result.outcome;
 }
 
@@ -121,19 +225,15 @@ function orderContext(orderId) {
   return { order, sub, customer: store.get('customers', sub.customerId), child: store.get('children', sub.childId) };
 }
 
-async function sendPaymentConfirmation(orderId, first) {
+function sendPaymentConfirmation(orderId, first) {
   const { sub, customer, child } = orderContext(orderId);
   const subject = first
     ? `Bem-vindo(a)! A primeira história de ${child.name} já está sendo escrita`
     : `Assinatura renovada: mais histórias para ${child.name}`;
-  try {
-    await sendTemplate('pagamento_confirmado', customer.email, subject, {
-      parentName: customer.parentName, childName: child.name, paidUntil: sub.paidUntil, first,
-      accountUrl: `${config.baseUrl}/conta/${customer.token}`,
-    });
-  } catch (err) {
-    console.error('Falha ao enviar confirmação de pagamento:', err.message);
-  }
+  queueEmail('pagamento_confirmado', customer.email, subject, {
+    parentName: customer.parentName, childName: child.name, paidUntil: sub.paidUntil, first,
+    accountUrl: `${config.baseUrl}/conta/${customer.token}`,
+  });
 }
 
 // Rede de segurança caso algum aviso (webhook) do Mercado Pago se perca.
@@ -166,8 +266,10 @@ export function scheduleDueStories() {
     const busy = store.find('stories', (st) =>
       st.subscriptionId === sub.id && (st.status === 'queued' || st.status === 'generating'));
     if (busy) continue;
-    let next = parseIso(sub.nextStoryAt).getTime();
-    while (next <= now.getTime()) next += config.storyIntervalDays * DAY;
+    // Próxima data: pula os intervalos que já passaram (sem rajada depois de um tempo parado).
+    const interval = config.storyIntervalDays * DAY;
+    const due = parseIso(sub.nextStoryAt).getTime();
+    const next = due + (Math.floor((now.getTime() - due) / interval) + 1) * interval;
     store.transaction(() => {
       store.insert('stories', {
         token: newToken(), subscriptionId: sub.id, childId: sub.childId, status: 'queued', theme: '', title: '',
@@ -186,12 +288,15 @@ export function recoverAndRetry() {
   const store = db();
   const hourAgo = plusDays(-1 / 24);
   const twentyMinAgo = plusDays(-20 / 1440);
-  store.transaction(() => {
-    for (const st of store.all('stories')) {
-      if (st.status === 'generating' && st.startedAt < hourAgo) st.status = 'queued';
-      else if (st.status === 'failed' && st.attempts < 3 && st.startedAt < twentyMinAgo) st.status = 'queued';
+  let changed = false;
+  for (const st of store.all('stories')) {
+    if ((st.status === 'generating' && st.startedAt < hourAgo)
+      || (st.status === 'failed' && st.attempts < 3 && st.startedAt < twentyMinAgo)) {
+      st.status = 'queued';
+      changed = true;
     }
-  });
+  }
+  if (changed) store.save();
 }
 
 export function nextQueuedStory() {
@@ -202,43 +307,37 @@ export function nextQueuedStory() {
   return queued.length ? queued[0].id : null;
 }
 
-export async function notifyReadyStories() {
+export function notifyReadyStories() {
   const store = db();
   for (const story of store.filter('stories', (s) => s.status === 'ready' && !s.emailedAt)) {
     const sub = store.get('subscriptions', story.subscriptionId);
     const customer = store.get('customers', sub.customerId);
     const child = store.get('children', story.childId);
-    try {
-      await sendTemplate('historia_pronta', customer.email, `Nova história para ${child.name}: ${story.title}`, {
-        childName: child.name, title: story.title, summary: story.summary,
-        storyUrl: `${config.baseUrl}/h/${story.token}`, accountUrl: `${config.baseUrl}/conta/${customer.token}`,
-      });
-    } catch (err) {
-      console.error(`Falha ao enviar e-mail da história ${story.id}:`, err.message);
-      continue;
-    }
+    queueEmail('historia_pronta', customer.email, `Nova história para ${child.name}: ${story.title}`, {
+      childName: child.name, title: story.title, summary: story.summary,
+      storyUrl: `${config.baseUrl}/h/${story.token}`, accountUrl: `${config.baseUrl}/conta/${customer.token}`,
+    });
     store.update('stories', story.id, { emailedAt: nowIso() });
   }
 }
 
-export async function alertAdminFailures() {
+// História adiada (limite da IA, rede fora) mais do que isso: avisa o admin (~2 horas com 15 min de espera).
+export const MAX_DEFERRALS = 8;
+
+export function alertAdminFailures() {
   const store = db();
-  const rows = store.filter('stories', (s) => s.status === 'failed' && s.attempts >= 3 && !s.adminAlerted);
+  const rows = store.filter('stories', (s) => !s.adminAlerted
+    && ((s.status === 'failed' && s.attempts >= 3) || (s.status === 'queued' && (s.deferrals || 0) >= MAX_DEFERRALS)));
   if (!rows.length) return;
   if (config.adminEmail) {
-    try {
-      await sendTemplate('alerta_admin', config.adminEmail, `[${config.siteName}] ${rows.length} história(s) falharam`, {
-        rows: rows.map((r) => ({ id: r.id, error: r.error })), adminUrl: `${config.baseUrl}/admin`,
-      });
-    } catch (err) {
-      console.error('Falha ao enviar alerta ao admin:', err.message);
-      return;
-    }
+    queueEmail('alerta_admin', config.adminEmail, `[${config.siteName}] ${rows.length} história(s) falharam`, {
+      rows: rows.map((r) => ({ id: r.id, error: r.error })), adminUrl: `${config.baseUrl}/admin`,
+    });
   }
   store.transaction(() => rows.forEach((r) => { r.adminAlerted = true; }));
 }
 
-export async function expireAndRemind() {
+export function expireAndRemind() {
   const store = db();
   const now = new Date();
   const nowStr = now.toISOString();
@@ -246,18 +345,13 @@ export async function expireAndRemind() {
 
   // Lembrete de renovação alguns dias antes de vencer (uma vez por vencimento)
   const toRemind = store.filter('subscriptions', (s) => s.status === 'active' && s.remindersEnabled
-    && s.paidUntil <= limit && s.reminderSentFor !== s.paidUntil);
+    && s.paidUntil <= limit && s.paidUntil > nowStr && s.reminderSentFor !== s.paidUntil);
   for (const sub of toRemind) {
     const customer = store.get('customers', sub.customerId);
     const child = store.get('children', sub.childId);
-    try {
-      await sendTemplate('lembrete_renovacao', customer.email, `As histórias de ${child.name} acabam em breve`, {
-        childName: child.name, paidUntil: sub.paidUntil, accountUrl: `${config.baseUrl}/conta/${customer.token}#renovar`,
-      });
-    } catch (err) {
-      console.error('Falha ao enviar lembrete de renovação:', err.message);
-      continue;
-    }
+    queueEmail('lembrete_renovacao', customer.email, `As histórias de ${child.name} acabam em breve`, {
+      childName: child.name, paidUntil: sub.paidUntil, accountUrl: `${config.baseUrl}/conta/${customer.token}#renovar-${sub.id}`,
+    });
     store.update('subscriptions', sub.id, { reminderSentFor: sub.paidUntil });
   }
 
@@ -267,13 +361,22 @@ export async function expireAndRemind() {
     if (!sub.remindersEnabled) continue;
     const customer = store.get('customers', sub.customerId);
     const child = store.get('children', sub.childId);
-    try {
-      await sendTemplate('plano_expirou', customer.email, `Sentimos sua falta! Renove as histórias de ${child.name}`, {
-        childName: child.name, accountUrl: `${config.baseUrl}/conta/${customer.token}#renovar`,
-      });
-    } catch (err) {
-      console.error('Falha ao enviar aviso de expiração:', err.message);
-    }
+    queueEmail('plano_expirou', customer.email, `Sentimos sua falta! Renove as histórias de ${child.name}`, {
+      childName: child.name, accountUrl: `${config.baseUrl}/conta/${customer.token}#renovar-${sub.id}`,
+    });
+  }
+}
+
+// Faxina diária: e-mails antigos (têm dados pessoais) e pastas de histórias sem registro.
+export function housekeeping(maxAgeDays = 30) {
+  const store = db();
+  const limit = plusDays(-maxAgeDays);
+  store.remove('emails', (e) => e.status !== 'pending' && e.createdAt < limit);
+  const dir = paths.stories();
+  if (!fs.existsSync(dir)) return;
+  const known = new Set(store.all('stories').map((s) => String(s.id)));
+  for (const name of fs.readdirSync(dir)) {
+    if (!known.has(name)) removeStoryFiles(name);
   }
 }
 
@@ -307,7 +410,12 @@ export function deleteCustomerData(customerId) {
   const subIds = new Set(store.filter('subscriptions', (s) => s.customerId === customerId).map((s) => s.id));
   const stories = store.filter('stories', (st) => subIds.has(st.subscriptionId));
   stories.forEach((st) => removeStoryFiles(st.id));
+  const email = store.get('customers', customerId).email;
   store.transaction(() => {
+    store.remove('emails', (e) => e.to === email);
+    for (const order of store.filter('orders', (o) => subIds.has(o.subscriptionId) && o.status === 'pending')) {
+      order.status = 'canceled';
+    }
     store.remove('stories', (st) => subIds.has(st.subscriptionId));
     for (const sub of store.filter('subscriptions', (s) => subIds.has(s.id))) {
       Object.assign(sub, { status: 'canceled', remindersEnabled: false });
@@ -335,6 +443,6 @@ export function dashboardStats() {
     storiesReady: store.filter('stories', (s) => s.status === 'ready').length,
     storiesQueued: store.filter('stories', (s) => s.status === 'queued' || s.status === 'generating').length,
     storiesFailed: store.filter('stories', (s) => s.status === 'failed').length,
-    workerHeartbeat: store.kvGet('worker_heartbeat'),
+    emailProblems: emailProblems().length,
   };
 }

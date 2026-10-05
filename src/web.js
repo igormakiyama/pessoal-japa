@@ -3,23 +3,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { config, plans } from './config.js';
+import { config, paths, plans } from './config.js';
 import {
   DEFAULT_APPEARANCE, EYE_COLORS, FAVORITE_COLORS, GENDERS, HAIR_COLORS, HAIR_STYLES, INTERESTS, PETS,
   SAMPLE_CHILD, SAMPLE_STORY, SKIN_TONES, THEMES,
 } from './content.js';
 import {
-  Router, adminEnabled, cookieHeader, createAdminSession, isAdmin, isHttps, rateLimited, readForm, readJson,
-  redirect, safeEqual, sameOrigin, send, sendHtml, sendJson, serveFile,
+  Router, adminEnabled, clientIp, cookieHeader, createAdminSession, csrfToken, isAdmin, isBlocked, isHttps, rateLimited,
+  rateLimitedKey, recordHit,
+  readForm, readJson, redirect, revokeAdminSessions, safeEqual, sameOrigin, send, sendHtml, sendJson, serveFile, validCsrf,
 } from './http.js';
 import { avatarSVG, sceneSVG } from './illustrate.js';
-import { sendTemplate } from './mailer.js';
 import { PaymentError, fetchPayment, normalize } from './payments.js';
 import { readScene, readStory, storyPdfPath } from './pipeline.js';
 import * as services from './services.js';
 import { db } from './store.js';
 import { collapseSpaces, nowIso, parseIso } from './util.js';
 import * as views from './views/pages.js';
+import { workerHeartbeat } from './worker.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$/;
@@ -93,6 +94,17 @@ const tooMany = (res) => sendHtml(res, 429, views.message({
   title: 'Calma aí!', text: 'Muitas tentativas seguidas. Tente de novo daqui a pouco.',
 }));
 
+const forbidden = (res) => sendHtml(res, 403, views.message({
+  title: 'Ação recusada', text: 'O formulário expirou ou veio de outro site. Volte ao painel e tente de novo.',
+  link: ['/admin', 'Voltar ao painel'],
+}));
+
+// Destino após o login: só caminhos internos simples (sem //, barra invertida ou caracteres de controle).
+export function safeNextPath(value) {
+  const next = String(value || '');
+  return /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(next) ? next : '/admin';
+}
+
 function requireAdmin(req, res) {
   if (isAdmin(req)) return true;
   const next = encodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -126,9 +138,13 @@ export function buildRouter() {
     { 'Content-Type': 'text/plain; charset=utf-8' }));
 
   r.get('/saude', ({ res }) => {
-    const heartbeat = parseIso(db().kvGet('worker_heartbeat'));
+    const heartbeat = parseIso(workerHeartbeat());
     const workerOk = Boolean(heartbeat && Date.now() - heartbeat.getTime() < 30 * 60000);
-    sendJson(res, 200, { web: 'ok', worker: workerOk ? 'ok' : 'sem sinal' });
+    sendJson(res, 200, {
+      web: 'ok',
+      worker: workerOk ? 'ok' : 'sem sinal',
+      email: services.emailProblems().length ? 'falhando' : 'ok',
+    });
   });
 
   // ------------------------------------------------ assinatura e checkout
@@ -169,12 +185,14 @@ export function buildRouter() {
     if (config.paymentProvider !== 'fake') return notFound(res);
     const order = db().find('orders', (o) => o.token === params.token);
     if (!order) return notFound(res);
-    sendHtml(res, 200, views.fakeCheckout({ order, plan: plans()[order.plan], admin: isAdmin(req) }));
+    const admin = isAdmin(req);
+    sendHtml(res, 200, views.fakeCheckout({ order, plan: plans()[order.plan], admin, csrf: admin ? csrfToken(req) : '' }));
   });
 
   r.post('/checkout-teste/:token', async ({ req, res, params }) => {
     if (config.paymentProvider !== 'fake') return notFound(res);
     if (!requireAdmin(req, res)) return undefined;
+    if (!validCsrf(req, await readForm(req))) return forbidden(res);
     const order = db().find('orders', (o) => o.token === params.token);
     if (!order) return notFound(res);
     await services.applyPayment(order.token, `teste-${order.id}`, 'approved', order.amountCents);
@@ -186,11 +204,8 @@ export function buildRouter() {
     const order = store.find('orders', (o) => o.token === token);
     if (!order) return null;
     const sub = store.get('subscriptions', order.subscriptionId);
-    return {
-      ...order,
-      customerToken: store.get('customers', sub.customerId).token,
-      childName: store.get('children', sub.childId).name,
-    };
+    // Sem o link da conta: ele vai só para o e-mail cadastrado (quem pagou pode não ser o dono do e-mail).
+    return { ...order, childName: store.get('children', sub.childId).name };
   };
 
   r.get('/obrigado/:token', async ({ res, params, query }) => {
@@ -243,7 +258,7 @@ export function buildRouter() {
     const customer = customerOr404(res, params.token);
     if (!customer) return;
     const subs = services.customerSubscriptions(customer.id).map((sub) => ({
-      ...sub, avatar: avatarSVG(sub.child.appearance, sub.child.petType, 160),
+      ...sub, avatar: avatarSVG(sub.child.appearance, sub.child.petType, 160, `Personagem de ${sub.child.name}`),
     }));
     sendHtml(res, 200, views.account({ customer, subs, saved: query.get('salvo') === '1' }));
   });
@@ -324,16 +339,14 @@ export function buildRouter() {
   r.post('/entrar', async ({ req, res }) => {
     const form = await readForm(req);
     const email = String(form.get('email') || '').trim().toLowerCase();
-    if (EMAIL_RE.test(email) && !rateLimited(req, 'login-link', 5, 3600000)) {
+    if (EMAIL_RE.test(email) && !rateLimited(req, 'login-link', 5, 3600000)
+      && !rateLimitedKey(`login-link-email:${email}`, 3, 3600000)) {
       const customer = services.findCustomerByEmail(email);
+      // Vai para a fila (envio em segundo plano): o tempo de resposta não revela quem é cliente.
       if (customer) {
-        try {
-          await sendTemplate('link_acesso', email, `Seu link de acesso - ${config.siteName}`, {
-            accountUrl: `${config.baseUrl}/conta/${customer.token}`,
-          });
-        } catch (err) {
-          console.error('Falha ao enviar link de acesso:', err.message);
-        }
+        services.queueEmail('link_acesso', email, `Seu link de acesso - ${config.siteName}`, {
+          accountUrl: `${config.baseUrl}/conta/${customer.token}`,
+        });
       }
     }
     // Mesma resposta sempre, para não revelar quem é cliente.
@@ -343,8 +356,9 @@ export function buildRouter() {
   // ------------------------------------------------ histórias
 
   const readyStory = (token) => {
-    const story = db().find('stories', (s) => s.token === token && s.status === 'ready');
-    if (!story) return null;
+    // Já entregue alguma vez (readyAt): continua acessível mesmo enquanto o admin manda refazer.
+    const story = db().find('stories', (s) => s.token === token && s.readyAt);
+    if (!story || !fs.existsSync(path.join(paths.storyDir(story.id), 'story.json'))) return null;
     return { ...story, childName: db().get('children', story.childId).name };
   };
 
@@ -353,7 +367,9 @@ export function buildRouter() {
     if (!row) return notFound(res);
     const story = readStory(row.id);
     sendHtml(res, 200, views.storyPage({
-      story, scenes: story.cenas.map((_, i) => readScene(row.id, i)), childName: row.childName,
+      // Ilustrações decorativas (o texto ao lado conta a cena); arquivos antigos tinham role="img" sem nome
+      story, scenes: story.cenas.map((_, i) => readScene(row.id, i).replace(' role="img">', ' aria-hidden="true">')),
+      childName: row.childName,
       pdfUrl: row.hasPdf ? `/h/${params.token}/pdf` : null, isSample: false,
     }));
   });
@@ -372,20 +388,22 @@ export function buildRouter() {
 
   r.get('/admin/login', ({ req, res, query }) => {
     if (isAdmin(req)) return redirect(res, '/admin');
-    return sendHtml(res, 200, views.adminLogin({ next: query.get('next'), enabled: adminEnabled() }));
+    return sendHtml(res, 200, views.adminLogin({ next: safeNextPath(query.get('next')), enabled: adminEnabled() }));
   });
 
   r.post('/admin/login', async ({ req, res }) => {
     const form = await readForm(req);
-    const nextUrl = String(form.get('next') || '/admin');
-    const safeNext = nextUrl.startsWith('/') && !nextUrl.startsWith('//') ? nextUrl : '/admin';
-    if (rateLimited(req, 'admin-login', 5, 15 * 60000)) {
+    const safeNext = safeNextPath(form.get('next'));
+    // Só as tentativas erradas contam: 5 erros em 15 minutos bloqueiam aquele IP por um tempo.
+    const failKey = `admin-login-fail:${clientIp(req)}`;
+    if (isBlocked(failKey, 5, 15 * 60000)) {
       return sendHtml(res, 429, views.adminLogin({ next: safeNext, enabled: adminEnabled(), error: 'Muitas tentativas. Aguarde 15 minutos.' }));
     }
     const ok = adminEnabled()
       && safeEqual(String(form.get('email') || '').trim().toLowerCase(), config.adminEmail)
       && safeEqual(String(form.get('password') || ''), config.adminPassword);
     if (!ok) {
+      recordHit(failKey, 15 * 60000);
       return sendHtml(res, 401, views.adminLogin({ next: safeNext, enabled: adminEnabled(), error: 'E-mail ou senha incorretos.' }));
     }
     return redirect(res, safeNext, 303, {
@@ -393,9 +411,10 @@ export function buildRouter() {
     });
   });
 
-  r.post('/admin/logout', ({ req, res }) => redirect(res, '/', 303, {
-    'Set-Cookie': cookieHeader('adm', '', { maxAge: 0, secure: isHttps(req) }),
-  }));
+  r.post('/admin/logout', async ({ req, res }) => {
+    if (validCsrf(req, await readForm(req))) revokeAdminSessions();
+    return redirect(res, '/', 303, { 'Set-Cookie': cookieHeader('adm', '', { maxAge: 0, secure: isHttps(req) }) });
+  });
 
   r.get('/admin', ({ req, res }) => {
     if (!requireAdmin(req, res)) return;
@@ -403,7 +422,10 @@ export function buildRouter() {
     const customerOf = (sub) => store.get('customers', sub.customerId);
     const childOf = (id) => store.get('children', id);
     const subs = store.filter('subscriptions', (s) => s.status !== 'pending').sort((a, b) => b.id - a.id).slice(0, 100)
-      .map((s) => ({ ...s, email: customerOf(s).email, childName: childOf(s.childId).name, age: childOf(s.childId).age }));
+      .map((s) => ({
+        ...s, email: customerOf(s).email, customerToken: customerOf(s).token,
+        childName: childOf(s.childId).name, age: childOf(s.childId).age,
+      }));
     const stories = [...store.all('stories')].sort((a, b) => b.id - a.id).slice(0, 50)
       .map((st) => ({ ...st, childName: childOf(st.childId).name }));
     const orders = [...store.all('orders')].sort((a, b) => b.id - a.id).slice(0, 50)
@@ -413,22 +435,29 @@ export function buildRouter() {
     if (config.paymentProvider === 'mercadopago' && !config.baseUrl.startsWith('https://')) warnings.push('BASE_URL não usa https: o Mercado Pago não consegue enviar os avisos de pagamento.');
     if (config.llmProvider === 'demo') warnings.push('IA em modo demonstração (histórias de modelo fixo). Coloque LLM_API_KEY (Groq) no .env.site.');
     if (config.emailProvider === 'outbox') warnings.push('E-mails não estão sendo enviados (ficam em DATA_DIR/outbox). Coloque BREVO_API_KEY no .env.site.');
-    sendHtml(res, 200, views.admin({ stats: services.dashboardStats(), subs, stories, orders, warnings }));
+    const problems = services.emailProblems();
+    if (problems.length) {
+      warnings.push(`${problems.length} e-mail(s) com falha no envio. Último erro: ${problems[problems.length - 1].lastError || '—'}`);
+    }
+    const stats = { ...services.dashboardStats(), workerHeartbeat: workerHeartbeat() };
+    sendHtml(res, 200, views.admin({ stats, subs, stories, orders, warnings, csrf: csrfToken(req) }));
   });
 
-  r.post('/admin/historia/:storyId/refazer', ({ req, res, params }) => {
-    if (!requireAdmin(req, res)) return;
+  r.post('/admin/historia/:storyId/refazer', async ({ req, res, params }) => {
+    if (!requireAdmin(req, res)) return undefined;
+    if (!validCsrf(req, await readForm(req))) return forbidden(res);
     db().update('stories', params.storyId, {
       status: 'queued', attempts: 0, adminAlerted: false, emailedAt: null, error: null, retryAt: null,
     });
-    redirect(res, '/admin');
+    return redirect(res, '/admin');
   });
 
-  r.post('/admin/assinatura/:subscriptionId/gerar', ({ req, res, params }) => {
-    if (!requireAdmin(req, res)) return;
+  r.post('/admin/assinatura/:subscriptionId/gerar', async ({ req, res, params }) => {
+    if (!requireAdmin(req, res)) return undefined;
+    if (!validCsrf(req, await readForm(req))) return forbidden(res);
     const sub = db().get('subscriptions', params.subscriptionId);
     if (sub && sub.status === 'active') db().update('subscriptions', sub.id, { nextStoryAt: nowIso() });
-    redirect(res, '/admin');
+    return redirect(res, '/admin');
   });
 
   return r;

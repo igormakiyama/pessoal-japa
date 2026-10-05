@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { config } from './config.js';
+import { db } from './store.js';
 
 // ---------------------------------------------------------------- rotas
 
@@ -86,9 +87,11 @@ export async function readJson(req) {
   }
 }
 
+// IP do visitante. O proxy do servidor acrescenta o IP real no FIM do X-Forwarded-For;
+// o começo do cabeçalho é controlado pelo visitante e não serve para limitar tentativas.
 export function clientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.socket.remoteAddress || '-';
+  const hops = String(req.headers['x-forwarded-for'] || '').split(',').map((h) => h.trim()).filter(Boolean);
+  return hops[hops.length - 1] || req.socket.remoteAddress || '-';
 }
 
 export function isHttps(req) {
@@ -99,7 +102,13 @@ export function parseCookies(req) {
   const cookies = {};
   for (const part of String(req.headers.cookie || '').split(';')) {
     const eq = part.indexOf('=');
-    if (eq > 0) cookies[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
+    if (eq <= 0) continue;
+    const value = part.slice(eq + 1).trim();
+    try {
+      cookies[part.slice(0, eq).trim()] = decodeURIComponent(value);
+    } catch {
+      cookies[part.slice(0, eq).trim()] = value; // cookie de outro site com % solto: guarda cru
+    }
   }
   return cookies;
 }
@@ -107,7 +116,8 @@ export function parseCookies(req) {
 // Formulários enviados de outros sites são recusados (proteção contra CSRF).
 export function sameOrigin(req) {
   const origin = req.headers.origin;
-  if (!origin || origin === 'null') return true;
+  if (!origin) return true;
+  if (origin === 'null') return false; // POST que passou por redirecionamento de outro site
   let host;
   try {
     host = new URL(origin).host;
@@ -195,22 +205,43 @@ export function serveFile(req, res, baseDir, relativePath, { maxAge = 3600, down
 // ---------------------------------------------------------------- proteção
 
 const hits = new Map();
+const MAX_KEYS = 20000;
 
-// Limite simples por IP, em memória (evita spam de cadastro, de e-mails e chute de senha).
-export function rateLimited(req, bucket, limit = 10, windowMs = 3600000) {
-  const key = `${bucket}:${clientIp(req)}`;
+// Limpeza periódica (fora das requisições) das chaves sem tentativas recentes.
+setInterval(() => {
   const now = Date.now();
-  const recent = (hits.get(key) || []).filter((t) => t > now - windowMs);
-  if (recent.length >= limit) {
-    hits.set(key, recent);
-    return true;
-  }
-  recent.push(now);
-  hits.set(key, recent);
-  if (hits.size > 10000) {
-    for (const [k, times] of hits) if (!times.some((t) => t > now - windowMs)) hits.delete(k);
-  }
+  for (const [key, entry] of hits) if (entry.until < now) hits.delete(key);
+}, 5 * 60000).unref();
+
+function recentHits(key, windowMs) {
+  const entry = hits.get(key);
+  return entry ? entry.times.filter((t) => t > Date.now() - windowMs) : [];
+}
+
+// Já passou do limite? (só consulta, não conta tentativa)
+export function isBlocked(key, limit, windowMs) {
+  return recentHits(key, windowMs).length >= limit;
+}
+
+// Conta uma tentativa para a chave.
+export function recordHit(key, windowMs) {
+  const times = recentHits(key, windowMs);
+  times.push(Date.now());
+  hits.delete(key); // reinsere no fim: a Map fica em ordem de uso
+  hits.set(key, { times, until: Date.now() + windowMs });
+  while (hits.size > MAX_KEYS) hits.delete(hits.keys().next().value);
+}
+
+// Limite simples por chave, em memória: conta a tentativa e diz se passou do limite.
+export function rateLimitedKey(key, limit = 10, windowMs = 3600000) {
+  if (isBlocked(key, limit, windowMs)) return true;
+  recordHit(key, windowMs);
   return false;
+}
+
+// Limite por IP (evita spam de cadastro, de e-mails e chute de senha).
+export function rateLimited(req, bucket, limit = 10, windowMs = 3600000) {
+  return rateLimitedKey(`${bucket}:${clientIp(req)}`, limit, windowMs);
 }
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest();
@@ -219,11 +250,14 @@ export function safeEqual(a, b) {
   return crypto.timingSafeEqual(sha256(String(a)), sha256(String(b)));
 }
 
-// Sessão do administrador: cookie assinado com SESSION_SECRET. Trocar a senha invalida as sessões.
+// Sessão do administrador: cookie assinado com SESSION_SECRET.
+// Trocar a senha ou clicar em "Sair" invalida todas as sessões (a "época" muda).
+const sessionEpoch = () => String(db().kvGet('admin_session_epoch', '0'));
+
 function sessionSignature(expires) {
   return crypto
     .createHmac('sha256', config.sessionSecret)
-    .update(`${config.adminEmail}|${expires}|${sha256(config.adminPassword).toString('hex')}`)
+    .update(`${config.adminEmail}|${expires}|${sha256(config.adminPassword).toString('hex')}|${sessionEpoch()}`)
     .digest('base64url');
 }
 
@@ -234,11 +268,24 @@ export function createAdminSession(days = 7) {
   return `${expires}.${sessionSignature(expires)}`;
 }
 
+export function revokeAdminSessions() {
+  db().kvSet('admin_session_epoch', String(Number(sessionEpoch()) + 1));
+}
+
 export function isAdmin(req) {
   if (!adminEnabled()) return false;
   const value = parseCookies(req).adm;
   if (!value) return false;
   const [expires, signature] = value.split('.');
-  if (!expires || !signature || Number(expires) < Date.now()) return false;
+  if (!expires || !signature || !(Number(expires) > Date.now())) return false;
   return safeEqual(signature, sessionSignature(expires));
+}
+
+// Token anti-CSRF dos formulários do painel (atrelado à sessão atual).
+export function csrfToken(req) {
+  return crypto.createHmac('sha256', config.sessionSecret).update(`csrf|${parseCookies(req).adm || ''}`).digest('base64url');
+}
+
+export function validCsrf(req, form) {
+  return isAdmin(req) && safeEqual(String(form.get('csrf') || ''), csrfToken(req));
 }

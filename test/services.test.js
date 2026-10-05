@@ -30,6 +30,7 @@ test('aplicar pagamento é idempotente e manda boas-vindas uma vez', async () =>
   const first = db().get('subscriptions', subId).paidUntil;
   assert.equal(await services.applyPayment(order.token, '1', 'approved', 2490), 'ignored');
   assert.equal(db().get('subscriptions', subId).paidUntil, first);
+  await services.deliverPendingEmails();
   assert.equal(outbox().filter((m) => m.includes('Bem-vindo')).length, 1);
 });
 
@@ -54,6 +55,7 @@ test('renovação soma a partir do fim do período atual', async () => {
   await services.applyPayment(order2.token, '2', 'approved', 5990);
   const end2 = new Date(db().get('subscriptions', subId).paidUntil);
   assert.equal(Math.round((end2 - end1) / 86400000), 90);
+  await services.deliverPendingEmails();
   assert.ok(outbox().some((m) => m.includes('Assinatura renovada')));
 });
 
@@ -63,9 +65,11 @@ test('lembrete uma vez, depois expira e para de agendar', async () => {
   db().update('subscriptions', subId, { paidUntil: new Date(Date.now() + 2 * 86400000).toISOString() });
   await services.expireAndRemind();
   await services.expireAndRemind();
+  await services.deliverPendingEmails();
   assert.equal(outbox().filter((m) => m.includes('acabam em breve')).length, 1);
   db().update('subscriptions', subId, { paidUntil: new Date(Date.now() - 60000).toISOString() });
   await services.expireAndRemind();
+  await services.deliverPendingEmails();
   assert.equal(db().get('subscriptions', subId).status, 'expired');
   assert.ok(outbox().some((m) => m.includes('Sentimos sua falta')));
   assert.equal(services.scheduleDueStories(), 0);
@@ -92,8 +96,14 @@ test('história presa em "gerando" volta para a fila; falha tenta de novo até 3
   assert.equal(store.get('stories', c.id).status, 'failed');
 });
 
-test('webhook do Mercado Pago reconsulta o pagamento na API (corpo forjado não vale)', async () => {
+test('com Mercado Pago ligado e IA em demonstração, as vendas ficam bloqueadas', async () => {
   setup({ PAYMENT_PROVIDER: 'mercadopago', MP_ACCESS_TOKEN: 'TEST-123' });
+  const { subscription } = services.createSignup('mp@example.com', 'Maria', CHILD);
+  await assert.rejects(services.createOrder(subscription.id, 'mensal'), /modo demonstração/);
+});
+
+test('webhook do Mercado Pago reconsulta o pagamento na API (corpo forjado não vale)', async () => {
+  setup({ PAYMENT_PROVIDER: 'mercadopago', MP_ACCESS_TOKEN: 'TEST-123', LLM_PROVIDER: 'groq', LLM_API_KEY: 'k' });
   const srv = await startServer();
   const requests = [];
   globalThis.fetch = async (url, init = {}) => {

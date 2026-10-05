@@ -29,18 +29,27 @@ export function pruneOutbox(maxAgeDays = 30) {
   return removed;
 }
 
+let heartbeat = null;
+
+// Última volta do worker (para /saude e o painel).
+export const workerHeartbeat = () => heartbeat;
+
 // Uma volta do ciclo. Devolve true se produziu alguma história.
 export async function tick() {
-  db().kvSet('worker_heartbeat', nowIso());
+  heartbeat = nowIso();
   await services.runPeriodic('last_reconcile', 600, services.reconcilePendingOrders);
-  await services.runPeriodic('last_outbox_prune', 86400, () => pruneOutbox());
-  await services.expireAndRemind();
+  await services.runPeriodic('last_housekeeping', 86400, () => {
+    pruneOutbox();
+    services.housekeeping();
+  });
+  services.expireAndRemind();
   services.scheduleDueStories();
   services.recoverAndRetry();
   const storyId = services.nextQueuedStory();
   if (storyId) await produceStory(storyId);
-  await services.notifyReadyStories();
-  await services.alertAdminFailures();
+  services.notifyReadyStories();
+  services.alertAdminFailures();
+  await services.deliverPendingEmails();
   return storyId !== null;
 }
 
@@ -62,9 +71,9 @@ async function loop() {
 export function startWorker() {
   // Como só existe um processo, qualquer história "gerando" ao subir ficou presa num reinício: volta para a fila.
   const store = db();
-  store.transaction(() => {
-    for (const story of store.all('stories')) if (story.status === 'generating') story.status = 'queued';
-  });
+  const stuck = store.filter('stories', (story) => story.status === 'generating');
+  stuck.forEach((story) => { story.status = 'queued'; });
+  if (stuck.length) store.save();
   console.log(`Worker iniciado (IA: ${config.llmProvider}, pagamento: ${config.paymentProvider}, e-mail: ${config.emailProvider})`);
   timer = setTimeout(loop, 2000);
   timer.unref?.();

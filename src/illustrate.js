@@ -1019,7 +1019,8 @@ function nodeSVG(node, gradientId) {
 
 // Serializa o IR. Os ids dos degradês vêm de idPrefix ou de um hash do desenho,
 // para várias imagens na mesma página não se misturarem.
-export function toSVG(root, { width, height, idPrefix } = {}) {
+// label: nome para leitores de tela; sem label a imagem é decorativa (aria-hidden).
+export function toSVG(root, { width, height, idPrefix, label } = {}) {
   const prefix = idPrefix
     || 'g' + crypto.createHash('sha1').update(JSON.stringify(root)).digest('hex').slice(0, 10);
   const gradients = new Map();
@@ -1041,13 +1042,14 @@ export function toSVG(root, { width, height, idPrefix } = {}) {
   const w = width ?? root.width;
   const h = height ?? root.height;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fmt(root.width)} ${fmt(root.height)}" `
-    + `width="${fmt(w)}" height="${fmt(h)}" role="img">${defs}${body}</svg>`;
+    + `width="${fmt(w)}" height="${fmt(h)}" ${label ? `role="img" aria-label="${attr(label)}"` : 'aria-hidden="true"'}>`
+    + `${defs}${body}</svg>`;
 }
 
 export function sceneSVG(scene, night, appearance, petType = '', seed = '0') {
   return toSVG(sceneIR(scene, night, appearance, petType, seed));
 }
 
-export function avatarSVG(appearance, petType = '', size = 260) {
-  return toSVG(avatarIR(appearance, petType), { width: size, height: size });
+export function avatarSVG(appearance, petType = '', size = 260, label = '') {
+  return toSVG(avatarIR(appearance, petType), { width: size, height: size, label });
 }

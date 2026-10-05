@@ -24,7 +24,7 @@ ${noindex ? raw('<meta name="robots" content="noindex">') : ''}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=4">
 <link rel="icon" href="${FAVICON}">
 ${head}
 </head>
@@ -34,7 +34,7 @@ ${head}
     <a class="logo" href="/">${config.siteName}<span>.</span></a>
     <nav>
       <a class="hide-sm" href="/exemplo">Ver exemplo</a>
-      <a class="hide-sm" href="/entrar">Minha conta</a>
+      <a href="/entrar">Minha conta</a>
       <a class="btn small" href="/assinar">Assinar</a>
     </nav>
   </div>
@@ -44,8 +44,10 @@ ${content}
 </main>
 <footer>
   <div class="wrap">
-    <span>© ${config.siteName} · Histórias criadas com inteligência artificial e revisadas automaticamente.</span>
-    <span><a href="/termos">Termos</a> · <a href="/privacidade">Privacidade</a> · <a href="mailto:${config.supportEmail}">${config.supportEmail}</a></span>
+    <span>© ${config.siteName} · ${config.llmProvider === 'demo'
+      ? 'Site em fase de testes: as histórias atuais são de demonstração.'
+      : 'Histórias criadas com inteligência artificial e revisadas automaticamente.'}</span>
+    <span><a href="/entrar">Minha conta</a> · <a href="/exemplo">Exemplo</a> · <a href="/termos">Termos</a> · <a href="/privacidade">Privacidade</a> · <a href="mailto:${config.supportEmail}">${config.supportEmail}</a></span>
   </div>
 </footer>
 ${scripts.map((src) => html`<script src="${src}" defer></script>`)}
@@ -188,7 +190,7 @@ export function childFields(values) {
         <label><input type="radio" name="${name}" value="${key}"${checked(current === key)}><span>${swatch ? html`<i style="background:${value}"></i>` : ''}${labelOf(key, value)}</span></label>`);
   return html`
 <div class="card">
-  <h3>Sobre a criança</h3>
+  <h2 class="h3">Sobre a criança</h2>
   <div class="form-grid">
     <div>
       <label for="child_name">Nome ou apelido</label>
@@ -201,29 +203,29 @@ export function childFields(values) {
         ${Array.from({ length: 12 }, (_, i) => i + 1).map((a) => html`<option value="${a}"${selected(Number(values.age || 5) === a)}>${a} ${a === 1 ? 'ano' : 'anos'}</option>`)}
       </select>
     </div>
-    <div class="full">
-      <span class="label">É...</span>
+    <fieldset class="full">
+      <legend class="label">É...</legend>
       <div class="chips">${chips('gender', GENDERS, values.gender || 'neutro', (k, v) => v)}</div>
-    </div>
+    </fieldset>
   </div>
 </div>
 
 <div class="card">
-  <h3>Como ela é</h3>
+  <h2 class="h3">Como ela é</h2>
   <div class="avatar-box">
     <img id="avatar-preview" src="/avatar.svg" alt="Prévia do personagem" width="220" height="220">
     <div class="form-grid">
-      <div class="full"><span class="label">Tom de pele</span>
-        <div class="chips swatches">${chips('skin', SKIN_TONES, app.skin || 'media_clara', (k) => LABELS.skin[k], true)}</div></div>
-      <div class="full"><span class="label">Cabelo</span>
-        <div class="chips">${chips('hair_style', HAIR_STYLES, app.hair_style || 'curto', (k, v) => v)}</div></div>
-      <div class="full"><span class="label">Cor do cabelo</span>
-        <div class="chips swatches">${chips('hair_color', HAIR_COLORS, app.hair_color || 'castanho', (k) => LABELS.hair_color[k], true)}</div></div>
-      <div class="full"><span class="label">Olhos</span>
+      <fieldset class="full"><legend class="label">Tom de pele</legend>
+        <div class="chips swatches">${chips('skin', SKIN_TONES, app.skin || 'media_clara', (k) => LABELS.skin[k], true)}</div></fieldset>
+      <fieldset class="full"><legend class="label">Cabelo</legend>
+        <div class="chips">${chips('hair_style', HAIR_STYLES, app.hair_style || 'curto', (k, v) => v)}</div></fieldset>
+      <fieldset class="full"><legend class="label">Cor do cabelo</legend>
+        <div class="chips swatches">${chips('hair_color', HAIR_COLORS, app.hair_color || 'castanho', (k) => LABELS.hair_color[k], true)}</div></fieldset>
+      <fieldset class="full"><legend class="label">Olhos</legend>
         <div class="chips swatches">${chips('eyes', EYE_COLORS, app.eyes || 'castanhos', (k) => LABELS.eyes[k], true)}
-          <label><input type="checkbox" name="glasses" value="1"${checked(app.glasses)}><span>👓 Usa óculos</span></label></div></div>
-      <div class="full"><span class="label">Cor favorita</span>
-        <div class="chips swatches">${chips('fav_color', FAVORITE_COLORS, app.fav_color || 'azul', (k) => LABELS.fav_color[k], true)}</div></div>
+          <label><input type="checkbox" name="glasses" value="1"${checked(app.glasses)}><span>👓 Usa óculos</span></label></div></fieldset>
+      <fieldset class="full"><legend class="label">Cor favorita</legend>
+        <div class="chips swatches">${chips('fav_color', FAVORITE_COLORS, app.fav_color || 'azul', (k) => LABELS.fav_color[k], true)}</div></fieldset>
       <div>
         <label for="pet_type">Bichinho de estimação</label>
         <select id="pet_type" name="pet_type">
@@ -239,7 +241,7 @@ export function childFields(values) {
 </div>
 
 <div class="card">
-  <h3>Do que ela gosta</h3>
+  <h2 class="h3">Do que ela gosta</h2>
   <div class="chips">
     ${INTERESTS.map((item) => html`<label><input type="checkbox" name="interests" value="${item}"${checked((values.interests || []).includes(item))}><span>${item}</span></label>`)}
   </div>
@@ -251,7 +253,7 @@ export function childFields(values) {
 </div>
 
 <div class="card">
-  <h3>Temas que você quer reforçar</h3>
+  <h2 class="h3">Temas que você quer reforçar</h2>
   <div class="chips">
     ${Object.entries(THEMES).map(([key, theme]) => html`<label><input type="checkbox" name="themes" value="${key}"${checked((values.themes || []).includes(key))}><span>${theme[0]}</span></label>`)}
   </div>
@@ -274,7 +276,7 @@ export function signup({ values, errors = [] }) {
   <form method="post" action="/assinar" data-avatar>
     ${childFields(values)}
     <div class="card">
-      <h3>Seus dados</h3>
+      <h2 class="h3">Seus dados</h2>
       <div class="form-grid">
         <div>
           <label for="parent_name">Seu nome</label>
@@ -285,14 +287,14 @@ export function signup({ values, errors = [] }) {
           <input type="email" id="email" name="email" required autocomplete="email" value="${values.email || ''}">
           <div class="hint">É por aqui que as histórias chegam.</div>
         </div>
-        <div class="full">
-          <span class="label">Plano</span>
+        <fieldset class="full">
+          <legend class="label">Plano</legend>
           <div class="plan-pick">
             ${Object.entries(plans()).map(([key, plan]) => html`
             <label><input type="radio" name="plan" value="${key}"${checked((values.plan || 'mensal') === key)}>
               <span>${plan.name}<b>${brl(plan.priceCents)}</b><small class="muted">${plan.days} dias</small></span></label>`)}
           </div>
-        </div>
+        </fieldset>
         <div class="full">
           <label class="check"><input type="checkbox" name="consent" value="1" required>
             <span>Sou pai, mãe ou responsável pela criança, li e aceito os <a href="/termos" target="_blank">termos</a>
@@ -329,7 +331,9 @@ export function editChild({ customer, child, values, errors = [] }) {
 
 // ---------------------------------------------------------------- pagamento
 
-export function fakeCheckout({ order, plan, admin }) {
+const csrfField = (csrf) => html`<input type="hidden" name="csrf" value="${csrf}">`;
+
+export function fakeCheckout({ order, plan, admin, csrf }) {
   return layout({
     title: 'Pagamento de teste',
     noindex: true,
@@ -339,7 +343,7 @@ export function fakeCheckout({ order, plan, admin }) {
   ${admin ? html`
     <p class="muted">O site está em <b>modo de teste</b> (PAYMENT_PROVIDER=fake). Nenhum dinheiro é cobrado.</p>
     <p>Plano <b>${plan.name}</b> · ${brl(order.amountCents)}</p>
-    <form method="post"><button class="btn" type="submit">Simular pagamento aprovado</button></form>`
+    <form method="post">${csrfField(csrf)}<button class="btn" type="submit">Simular pagamento aprovado</button></form>`
     : html`
     <p>Os pagamentos deste site ainda não foram liberados. Seus dados ficaram guardados e avisaremos assim que as vendas abrirem.</p>
     <p class="hint">Administrador? <a href="/admin/login?next=${encodeURIComponent(`/checkout-teste/${order.token}`)}">Entre</a> para simular o pagamento.</p>`}
@@ -353,8 +357,8 @@ export function thanks({ order }) {
     body = html`<h1>Pagamento confirmado! 🎉</h1>
       <p>As histórias de <b>${order.childName}</b> estão garantidas. Se esta é a primeira compra, a primeira
         história já está sendo escrita e ilustrada e chega no seu e-mail em alguns minutos.</p>
-      <p><a class="btn" href="/conta/${order.customerToken}">Ir para minha conta</a></p>
-      <p class="hint">Guarde o e-mail de boas-vindas: ele tem o link da sua conta.</p>`;
+      <p>Enviamos para o e-mail cadastrado a confirmação com o <b>link da sua conta</b>: guarde esse e-mail.</p>
+      <p class="hint">Não chegou? Confira o spam ou peça um novo link em <a href="/entrar">Minha conta</a>.</p>`;
   } else if (order.status === 'pending') {
     body = html`<h1>Aguardando o pagamento...</h1>
       <p>Assim que o Mercado Pago confirmar (no Pix costuma ser na hora), esta página atualiza sozinha e você recebe um e-mail.</p>
@@ -386,7 +390,7 @@ export function account({ customer, subs, saved }) {
   ${saved ? html`<div class="notice">Dados salvos! Valem a partir da próxima história.</div>` : ''}
   ${subs.length ? '' : html`<div class="card"><p>Ainda não há assinaturas ativas. Se você acabou de pagar, aguarde alguns instantes e atualize a página.</p></div>`}
   ${subs.map((sub) => html`
-  <div class="card" id="renovar">
+  <div class="card" id="renovar-${sub.id}">
     <div class="sub-card">
       <div class="sub-avatar">${raw(sub.avatar)}</div>
       <div>
@@ -413,7 +417,7 @@ export function account({ customer, subs, saved }) {
         <h3 class="mt">Histórias</h3>
         ${sub.stories.length ? '' : html`<p class="muted">A primeira história está a caminho!</p>`}
         <ul class="story-list">
-          ${sub.stories.map((st) => html`<li>${st.status === 'ready'
+          ${sub.stories.map((st) => html`<li>${st.readyAt
             ? html`<span><b>${st.title}</b><br><small class="muted">${dateBr(st.readyAt)}</small></span>
               <a class="btn small secondary" href="/h/${st.token}">Abrir</a>`
             : html`<span class="muted">✨ Uma nova história está sendo criada...</span>`}</li>`)}
@@ -423,7 +427,7 @@ export function account({ customer, subs, saved }) {
   </div>`)}
 
   <div class="card">
-    <h3>Novo filho ou filha?</h3>
+    <h2 class="h3">Novo filho ou filha?</h2>
     <p>Faça uma nova assinatura com o mesmo e-mail e ela aparece aqui.</p>
     <a class="btn secondary small" href="/assinar">Nova assinatura</a>
   </div>
@@ -464,7 +468,7 @@ export function storyPage({ story, scenes, childName, pdfUrl, isSample }) {
   return layout({
     title: story.titulo,
     noindex: !isSample,
-    scripts: ['/static/story.js?v=3'],
+    scripts: ['/static/story.js?v=4'],
     content: html`
 <div class="wrap page-pad">
   <div class="story-head">
@@ -503,23 +507,23 @@ export function privacy() {
 <div class="wrap narrow card legal">
   <h1>Política de privacidade</h1>
   <p class="muted">Modelo inicial. Revise com um profissional antes de vender.</p>
-  <h3>Quais dados coletamos</h3>
+  <h2 class="h3">Quais dados coletamos</h2>
   <p>Do responsável: nome e e-mail. Da criança: nome ou apelido, idade, gênero (opcional), características de
     aparência escolhidas em uma lista (não pedimos fotos), gostos, temas e nome do bichinho de estimação.
     Os dados de pagamento ficam com o Mercado Pago; não temos acesso ao número do seu cartão.</p>
-  <h3>Para que usamos</h3>
+  <h2 class="h3">Para que usamos</h2>
   <p>Exclusivamente para criar e entregar as histórias, enviar avisos da assinatura e cumprir obrigações legais.
     Não vendemos nem compartilhamos dados para publicidade.</p>
-  <h3>Dados de crianças (LGPD, art. 14)</h3>
+  <h2 class="h3">Dados de crianças (LGPD, art. 14)</h2>
   <p>Tratamos dados de crianças somente com o consentimento do responsável, dado no momento da assinatura, e apenas
     o mínimo necessário para personalizar as histórias. Para escrever o texto usamos um serviço de inteligência
     artificial externo: enviamos a idade, os gostos, os temas e o texto livre que você escrever, mas
     <b>nunca o nome da criança nem o do bichinho</b>. Eles são trocados por apelidos fictícios e só voltam para a
     história dentro do nosso servidor.</p>
-  <h3>Por quanto tempo guardamos</h3>
+  <h2 class="h3">Por quanto tempo guardamos</h2>
   <p>Enquanto houver assinatura ou até você pedir a exclusão. Registros de pagamento são guardados pelo prazo exigido
     pela legislação fiscal, sem os dados da criança.</p>
-  <h3>Seus direitos</h3>
+  <h2 class="h3">Seus direitos</h2>
   <p>Você pode corrigir os dados na sua conta a qualquer momento e apagar tudo pelo botão “Apagar meus dados”.
     Dúvidas: <a href="mailto:${config.supportEmail}">${config.supportEmail}</a>.</p>
 </div>`,
@@ -533,20 +537,20 @@ export function terms() {
 <div class="wrap narrow card legal">
   <h1>Termos de uso</h1>
   <p class="muted">Modelo inicial. Revise com um profissional antes de vender.</p>
-  <h3>O serviço</h3>
+  <h2 class="h3">O serviço</h2>
   <p>${config.siteName} entrega histórias infantis personalizadas, criadas por inteligência artificial a partir das
     informações fornecidas pelo responsável, com ilustrações, narração pelo navegador e PDF. Cada plano dá direito a
     uma história nova a cada ${config.storyIntervalDays} dias durante o período pago.</p>
-  <h3>Conteúdo gerado por IA</h3>
+  <h2 class="h3">Conteúdo gerado por IA</h2>
   <p>Toda história passa por verificações automáticas de adequação à idade. Ainda assim, recomendamos que um adulto
     leia antes ou junto com a criança. Se algo não agradar, fale com a gente que refazemos a história.</p>
-  <h3>Pagamento e renovação</h3>
+  <h2 class="h3">Pagamento e renovação</h2>
   <p>O pagamento é feito pelo Mercado Pago (Pix, cartão ou boleto). Não há renovação automática: o plano vale pelo
     período pago e avisamos antes do vencimento.</p>
-  <h3>Arrependimento e reembolso</h3>
+  <h2 class="h3">Arrependimento e reembolso</h2>
   <p>Conforme o Código de Defesa do Consumidor (art. 49), você pode desistir em até 7 dias após a compra e receber o
     valor de volta. Basta escrever para <a href="mailto:${config.supportEmail}">${config.supportEmail}</a>.</p>
-  <h3>Uso das histórias</h3>
+  <h2 class="h3">Uso das histórias</h2>
   <p>As histórias são para uso pessoal e familiar: ler, ouvir, imprimir e presentear à vontade.</p>
 </div>`,
   });
@@ -575,7 +579,7 @@ export function adminLogin({ error, next, enabled }) {
   });
 }
 
-export function admin({ stats, subs, stories, orders, warnings }) {
+export function admin({ stats, subs, stories, orders, warnings, csrf }) {
   const heartbeat = stats.workerHeartbeat ? stats.workerHeartbeat.slice(0, 16).replace('T', ' ') : 'nunca';
   return layout({
     title: 'Painel',
@@ -584,7 +588,7 @@ export function admin({ stats, subs, stories, orders, warnings }) {
 <div class="wrap page-pad">
   <div class="admin-head">
     <h1>Painel</h1>
-    <form method="post" action="/admin/logout"><button class="btn ghost small" type="submit">Sair</button></form>
+    <form method="post" action="/admin/logout">${csrfField(csrf)}<button class="btn ghost small" type="submit">Sair</button></form>
   </div>
   ${warnings.map((w) => html`<div class="errors">⚠️ ${w}</div>`)}
   <div class="stats">
@@ -596,33 +600,33 @@ export function admin({ stats, subs, stories, orders, warnings }) {
   <p class="muted">Worker visto por último: ${heartbeat} (UTC) · IA: ${config.llmProvider === 'demo' ? 'modo demonstração' : config.llmModels.join(' → ')} · E-mail: ${config.emailProvider}</p>
 
   <div class="card">
-    <h3>Histórias recentes</h3>
+    <h2 class="h3">Histórias recentes</h2>
     <div class="table-wrap"><table>
       <tr><th>#</th><th>Criança</th><th>Título</th><th>Status</th><th>Tentativas</th><th>Criada</th><th></th></tr>
       ${stories.map((st) => html`<tr>
         <td>${st.id}</td><td>${st.childName}</td>
         <td>${st.status === 'ready' ? html`<a href="/h/${st.token}" target="_blank" rel="noopener">${st.title}</a>` : st.title || '—'}
           ${st.error ? html`<br><small class="err">${st.error.slice(0, 200)}</small>` : ''}</td>
-        <td>${st.status}</td><td>${st.attempts}</td><td>${dateBr(st.createdAt)}</td>
-        <td><form method="post" action="/admin/historia/${st.id}/refazer"><button class="btn ghost small" type="submit">Refazer</button></form></td>
+        <td>${st.status}${st.retryAt && st.status === 'queued' ? html`<br><small class="muted">nova tentativa às ${st.retryAt.slice(11, 16)} (UTC)</small>` : ''}</td><td>${st.attempts}</td><td>${dateBr(st.createdAt)}</td>
+        <td><form method="post" action="/admin/historia/${st.id}/refazer">${csrfField(csrf)}<button class="btn ghost small" type="submit">Refazer</button></form></td>
       </tr>`)}
     </table></div>
   </div>
 
   <div class="card">
-    <h3>Assinaturas</h3>
+    <h2 class="h3">Assinaturas</h2>
     <div class="table-wrap"><table>
       <tr><th>#</th><th>E-mail</th><th>Criança</th><th>Status</th><th>Pago até</th><th>Próxima</th><th></th></tr>
       ${subs.map((s) => html`<tr>
-        <td>${s.id}</td><td>${s.email}</td><td>${s.childName} (${s.age})</td><td>${s.status}</td>
+        <td>${s.id}</td><td>${s.email}<br><a href="/conta/${s.customerToken}" target="_blank" rel="noopener">abrir conta do cliente</a></td><td>${s.childName} (${s.age})</td><td>${s.status}</td>
         <td>${dateBr(s.paidUntil)}</td><td>${dateBr(s.nextStoryAt)}</td>
-        <td>${s.status === 'active' ? html`<form method="post" action="/admin/assinatura/${s.id}/gerar"><button class="btn ghost small" type="submit">Gerar agora</button></form>` : ''}</td>
+        <td>${s.status === 'active' ? html`<form method="post" action="/admin/assinatura/${s.id}/gerar">${csrfField(csrf)}<button class="btn ghost small" type="submit">Gerar agora</button></form>` : ''}</td>
       </tr>`)}
     </table></div>
   </div>
 
   <div class="card">
-    <h3>Pedidos</h3>
+    <h2 class="h3">Pedidos</h2>
     <div class="table-wrap"><table>
       <tr><th>#</th><th>E-mail</th><th>Plano</th><th>Valor</th><th>Status</th><th>Pagamento</th><th>Data</th></tr>
       ${orders.map((o) => html`<tr><td>${o.id}</td><td>${o.email}</td><td>${o.plan}</td><td>${brl(o.amountCents)}</td>

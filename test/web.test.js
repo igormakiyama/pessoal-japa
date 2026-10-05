@@ -8,7 +8,7 @@ import { readStory, storyPdfPath } from '../src/pipeline.js';
 import { db } from '../src/store.js';
 import { HOME_HEADLINE } from '../src/views/pages.js';
 import { tick } from '../src/worker.js';
-import { ADMIN, CHILD_FORM, adminCookie, outbox, postForm, setup, startServer } from './helpers.js';
+import { ADMIN, CHILD_FORM, adminCookie, csrfFrom, outbox, postForm, setup, simulatePayment, startServer } from './helpers.js';
 
 let srv;
 let base;
@@ -64,9 +64,15 @@ test('fluxo completo com pagamento de teste liberado só para o admin', async ()
   assert.equal(db().all('subscriptions')[0].status, 'pending');
 
   const cookie = await adminCookie(base);
-  const paid = await postForm(base, `/checkout-teste/${orderToken}`, {}, { cookie });
+  // Sem o token anti-CSRF do formulário, nem o admin consegue
+  assert.equal((await postForm(base, `/checkout-teste/${orderToken}`, {}, { cookie })).status, 403);
+  const paid = await simulatePayment(base, orderToken, cookie);
   assert.equal(paid.headers.get('location'), `/obrigado/${orderToken}`);
-  assert.ok((await (await fetch(`${base}/obrigado/${orderToken}`)).text()).includes('Pagamento confirmado'));
+  const thanks = await (await fetch(`${base}/obrigado/${orderToken}`)).text();
+  assert.ok(thanks.includes('Pagamento confirmado'));
+  // A página de obrigado nunca mostra o link da conta (ele vai só para o e-mail cadastrado)
+  assert.ok(!thanks.includes(db().all('customers')[0].token));
+  assert.ok(!thanks.includes('/conta/'));
   assert.equal(db().all('subscriptions')[0].status, 'active');
 
   assert.equal(await tick(), true);
@@ -108,7 +114,7 @@ test('fluxo completo com pagamento de teste liberado só para o admin', async ()
 test('editar criança, renovar e apagar dados', async () => {
   const orderToken = await signup('pai@example.com');
   const cookie = await adminCookie(base);
-  await postForm(base, `/checkout-teste/${orderToken}`, {}, { cookie });
+  await simulatePayment(base, orderToken, cookie);
   const customer = db().find('customers', (c) => c.email === 'pai@example.com');
   const sub = db().find('subscriptions', (s) => s.customerId === customer.id);
 
@@ -121,7 +127,7 @@ test('editar criança, renovar e apagar dados', async () => {
   const renew = await postForm(base, `/conta/${customer.token}/renovar/${sub.id}`, { plan: 'trimestral' });
   const renewalToken = renew.headers.get('location').split('/').pop();
   const before = db().get('subscriptions', sub.id).paidUntil;
-  await postForm(base, `/checkout-teste/${renewalToken}`, {}, { cookie });
+  await simulatePayment(base, renewalToken, cookie);
   assert.ok(db().get('subscriptions', sub.id).paidUntil > before);
 
   // Outro cliente não consegue mexer nesta assinatura
@@ -165,16 +171,31 @@ test('painel exige login e recusa senha errada', async () => {
     const res = await postForm(base, url, {});
     assert.match(res.headers.get('location'), /^\/admin\/login/, url);
   }
+  // Ações do painel exigem o token do formulário
+  assert.equal((await postForm(base, '/admin/assinatura/1/gerar', {}, { cookie })).status, 403);
+  const csrf = csrfFrom(html);
+  assert.equal((await postForm(base, '/admin/assinatura/1/gerar', { csrf }, { cookie })).headers.get('location'), '/admin');
   // Redirecionamento após login nunca sai do site
-  const evil = await postForm(base, '/admin/login', { email: ADMIN.email, password: ADMIN.password, next: '//evil.com' });
-  assert.equal(evil.headers.get('location'), '/admin');
+  for (const next of ['//evil.com', '/\\evil.com', '/\tevil.com', 'https://evil.com', '/admin/../x']) {
+    const evil = await postForm(base, '/admin/login', { email: ADMIN.email, password: ADMIN.password, next });
+    assert.equal(evil.headers.get('location'), '/admin', next);
+  }
+  // Sair invalida a sessão mesmo que alguém tenha copiado o cookie
+  const copied = await adminCookie(base);
+  const page = await (await fetch(base + '/admin', { headers: { cookie: copied } })).text();
+  await postForm(base, '/admin/logout', { csrf: csrfFrom(page) }, { cookie: copied });
+  assert.equal((await fetch(base + '/admin', { redirect: 'manual', headers: { cookie: copied } })).status, 303);
 });
 
 test('proteções: CSRF, arquivos fora de public/ e rotas públicas sem dados de clientes', async () => {
-  const csrf = await fetch(base + '/entrar', {
-    method: 'POST', headers: { origin: 'https://site-malicioso.com', 'content-type': 'application/x-www-form-urlencoded' }, body: 'email=a@b.com',
-  });
-  assert.equal(csrf.status, 403);
+  for (const origin of ['https://site-malicioso.com', 'https://outro.metodoim.com.br', 'null']) {
+    const csrf = await fetch(base + '/entrar', {
+      method: 'POST', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: 'email=a@b.com',
+    });
+    assert.equal(csrf.status, 403, origin);
+  }
+  // Cookie malformado de outro site do mesmo domínio não derruba o painel
+  assert.equal((await fetch(base + '/admin/login', { headers: { cookie: 'desconto=50%; nome=Jos%E9' } })).status, 200);
   for (const url of ['/static/..%2fsrc%2fconfig.js', '/static/..%2f..%2fetc%2fpasswd', '/static/%2e%2e/package.json', '/.env.site', '/store.json']) {
     assert.equal((await fetch(base + url)).status, 404, url);
   }

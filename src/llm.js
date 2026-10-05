@@ -33,14 +33,16 @@ const fold = (text) => String(text ?? '').normalize('NFD').replace(/\p{M}/gu, ''
 const cut = (text, max) => Array.from(text).slice(0, max).join('');
 const countWords = (text) => text.split(/\s+/).filter(Boolean).length;
 
-// Variantes acentuadas de cada letra: o mesmo padrão acha "Joao", "JOÃO" e "João".
-const ACCENTS = { a: 'aàáâãäå', e: 'eèéêë', i: 'iìíîï', o: 'oòóôõö', u: 'uùúûü', c: 'cç', n: 'nñ', y: 'yýÿ' };
+// Padrão tolerante a acentos: cada letra-base aceita qualquer acento depois dela.
+// Funciona sobre texto em NFD (letra + acento separados), então acha "Joao", "JOÃO",
+// "João" e também acentos menos comuns ("Yūki", "Kōji"). Use sempre com nfd().
+const nfd = (text) => String(text ?? '').normalize('NFD');
+const nfc = (text) => String(text ?? '').normalize('NFC');
 
 function loosePattern(term) {
   return [...fold(term).trim().replace(/\s+/g, ' ')].map((ch) => {
     if (ch === ' ') return '\\s+';
-    if (ACCENTS[ch]) return `[${ACCENTS[ch]}]\\p{M}*`;
-    if (/[\p{L}\p{N}]/u.test(ch)) return `${ch}\\p{M}*`;
+    if (/[\p{L}\p{N}]/u.test(ch)) return `${escapeRe(ch)}\\p{M}*`;
     return escapeRe(ch);
   }).join('');
 }
@@ -101,15 +103,25 @@ function aliasesFor(child) {
   return { name: free([ALIASES[gender], SPARE_ALIASES[gender]]), pet: free([ALIASES.pet, SPARE_ALIASES.pet]) };
 }
 
-// Nome real: aceita sem acento, maiúsculas, plural e diminutivos (Joãozinho, Pedrinho, Aninha, Pipoquinha).
+// Diminutivo a partir de um radical: "Marc" -> Marquinho(s); "Dieg" -> Dieguinho; "Pedr" -> Pedrinho.
+function diminutives(stem, plural) {
+  const s = plural ? 's' : 's?';
+  const out = [`${loosePattern(stem)}(?:inh|it)[oa]${s}`];
+  if (/c$/.test(stem)) out.push(`${loosePattern(stem.slice(0, -1))}qu(?:inh|it)[oa]${s}`);
+  if (/g$/.test(stem)) out.push(`${loosePattern(stem)}u(?:inh|it)[oa]${s}`);
+  return out;
+}
+
+// Nome real: aceita sem acento, maiúsculas, plural e os diminutivos comuns
+// (Joãozinho, Pedrinho, Aninha, Pipoquinha, Carlinhos, Marquinhos, Luquinhas, Luizinho,
+// Isabelinha, Beatrizinha, Joaquinzinho, Rafaelzinho, Davizinho).
 function realNameRegex(term) {
   const folded = fold(term).trim().replace(/\s+/g, ' ');
-  const options = [`${loosePattern(folded)}(?:s|zinh[oa]s?)?`];
-  if (!folded.includes(' ') && folded.length >= 3 && /[aeo]$/.test(folded)) {
-    const stem = folded.slice(0, -1);
-    options.push(`${loosePattern(stem)}inh[oa]s?`);
-    if (/c$/.test(stem)) options.push(`${loosePattern(stem.slice(0, -1))}quinh[oa]s?`);
-    if (/g$/.test(stem)) options.push(`${loosePattern(stem)}uinh[oa]s?`);
+  const options = [`${loosePattern(folded)}(?:s|zinh[oa]s?|zit[oa]s?|inh[oa]s?)?`];
+  if (!folded.includes(' ') && folded.length >= 3) {
+    if (/[aeo]$/.test(folded)) options.push(...diminutives(folded.slice(0, -1), false));
+    if (/[ao]s$/.test(folded)) options.push(...diminutives(folded.slice(0, -2), true));
+    if (/m$/.test(folded)) options.push(`${loosePattern(folded.slice(0, -1))}nzinh[oa]s?`);
   }
   return bounded(options.join('|'), 'giu');
 }
@@ -123,17 +135,26 @@ export function hideNames(text, child) {
     terms.push([real, alias], ...nameTokens(real).map((token) => [token, alias]));
   }
   terms.sort((a, b) => fold(b[0]).length - fold(a[0]).length);
-  let out = String(text ?? '').normalize('NFC');
+  let out = nfd(text);
   for (const [real, alias] of terms) out = out.replace(realNameRegex(real), () => alias);
-  return out;
+  return nfc(out);
+}
+
+// Última barreira antes de enviar: nenhum pedaço do nome real (3+ letras) pode sobrar no pedido.
+function leaksRealName(messages, child) {
+  const body = nfd(messages.map((m) => m.content).join('\n'));
+  const tokens = [child.name, child.pet_name].flatMap((n) => nameTokens(n || '')).filter((t) => t.length >= 3);
+  const { name, pet } = aliasesFor(child);
+  const aliases = new Set([name, pet].map(fold));
+  return tokens.filter((t) => !aliases.has(t)).some((t) => bounded(loosePattern(t), 'iu').test(body));
 }
 
 // Volta os apelidos para os nomes reais (depois que a história foi aprovada).
 function restoreText(text, child) {
   const { name, pet } = aliasesFor(child);
-  let out = String(text ?? '').replace(bounded(loosePattern(name), 'giu'), () => child.name);
+  let out = nfd(text).replace(bounded(loosePattern(name), 'giu'), () => child.name);
   if (child.pet_name) out = out.replace(bounded(loosePattern(pet), 'giu'), () => child.pet_name);
-  return out;
+  return nfc(out);
 }
 
 export function restoreNames(story, child) {
@@ -161,7 +182,7 @@ function aliasChild(child) {
 // Apelido com diminutivo ou grudado em outra palavra não volta para o nome real; pede de novo.
 function aliasProblems(story, child) {
   const { name, pet } = aliasesFor(child);
-  const text = [story.titulo, story.resumo, story.licao, storyText(story)].join('\n');
+  const text = nfd([story.titulo, story.resumo, story.licao, storyText(story)].join('\n'));
   const problems = [];
   for (const alias of child.pet_name ? [name, pet] : [name]) {
     const re = new RegExp(`${LETTER}*${loosePattern(alias)}${LETTER}*`, 'giu');
@@ -173,9 +194,9 @@ function aliasProblems(story, child) {
 
 // Troca personagens de marca citados pelos pais por algo genérico, para a IA não copiar.
 export function maskBrands(text) {
-  let out = String(text ?? '');
+  let out = nfd(text);
   for (const brand of BRANDS) out = out.replace(bounded(loosePattern(brand), 'giu'), 'um personagem de desenho');
-  return out;
+  return nfc(out);
 }
 
 // ---------------------------------------------------------------- chamada à IA
@@ -402,7 +423,7 @@ export function validateStory(data, child) {
 
   const name = String(child.name ?? '').trim();
   if (name) {
-    const hits = [...full.matchAll(bounded(loosePattern(name), 'giu'))].length;
+    const hits = [...nfd(full).matchAll(bounded(loosePattern(name), 'giu'))].length;
     if (hits < 2) problems.push(`O nome da criança (${name}) precisa aparecer na história várias vezes.`);
   }
 
@@ -416,7 +437,7 @@ export function validateStory(data, child) {
       .filter(Boolean).map((n) => fold(n).trim()),
   );
   for (const brand of BRANDS) {
-    if (!ownNames.has(fold(brand)) && bounded(loosePattern(brand)).test(lowered)) {
+    if (!ownNames.has(fold(brand)) && bounded(loosePattern(brand)).test(nfd(lowered))) {
       problems.push(`Não use personagens ou marcas protegidas ("${brand}"). Crie um personagem original.`);
     }
   }
@@ -441,6 +462,7 @@ export async function reviewStory(story, child) {
         + `TÍTULO: ${hide(story.titulo)}\n\n${hide(storyText(story))}`,
     },
   ];
+  if (leaksRealName(messages, child)) throw new LLMError(PRIVACY_BLOCK);
   const result = await chatJSON(messages, { temperature: 0.1 });
   const list = Array.isArray(result.problemas) ? result.problemas : [result.problemas].filter(Boolean);
   const problems = list.map((p) => String(p ?? '').trim()).filter(Boolean);
@@ -449,6 +471,8 @@ export async function reviewStory(story, child) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const PRIVACY_BLOCK = 'Proteção de privacidade: o pedido para a IA ainda tinha o nome real; nada foi enviado.';
 
 // Gera, valida e revisa uma história. Tenta até MAX_ATTEMPTS vezes antes de desistir.
 export async function generateStory(child, themeKey, previous = []) {
@@ -464,8 +488,10 @@ export async function generateStory(child, themeKey, previous = []) {
   let retryable = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     let data;
+    const messages = buildStoryMessages(child, themeKey, previous, feedback);
+    if (leaksRealName(messages, child)) throw new StoryGenerationError(PRIVACY_BLOCK);
     try {
-      data = await chatJSON(buildStoryMessages(child, themeKey, previous, feedback));
+      data = await chatJSON(messages);
     } catch (err) {
       if (!(err instanceof LLMError)) throw err;
       console.warn(`Tentativa ${attempt}: ${err.message}`);
@@ -486,7 +512,11 @@ export async function generateStory(child, themeKey, previous = []) {
         console.warn(`Revisão falhou (seguindo sem ela): ${err.message}`);
       }
     }
-    if (!problems.length) return restoreNames(story, child);
+    if (!problems.length) {
+      // Título e resumo com apelidos: é o que vai para a IA como "histórias anteriores" no futuro,
+      // mesmo que os pais troquem o nome da criança ou do bichinho depois.
+      return { ...restoreNames(story, child), promptTitle: story.titulo, promptSummary: story.resumo };
+    }
     console.log(`Tentativa ${attempt} reprovada: ${problems.join('; ')}`);
     feedback = problems;
     lastError = problems.join('; ');

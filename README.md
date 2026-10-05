@@ -67,10 +67,28 @@ O painel (`/admin`) mostra um aviso para cada item pendente.
 | Rota | Acesso |
 |---|---|
 | `/`, `/exemplo`, `/assinar`, `/entrar`, `/termos`, `/privacidade`, `/robots.txt`, `/saude`, `/avatar.svg`, `/static/*` | público, sem dados de clientes |
-| `/conta/<token>`, `/h/<token>`, `/h/<token>/pdf`, `/obrigado/<token>` | link secreto enviado por e-mail (token aleatório de 144 bits) |
+| `/conta/<token>`, `/h/<token>`, `/h/<token>/pdf` | link secreto enviado só por e-mail (token aleatório de 144 bits) |
+| `/obrigado/<token>` | página após o pagamento; nunca mostra o link da conta (ele vai só para o e-mail cadastrado) |
 | `/checkout-teste/<token>` | só existe no modo de teste; o pagamento simulado exige o admin logado |
 | `/webhooks/mercadopago` | público; ignora o conteúdo e reconsulta o pagamento na API |
-| `/admin` e ações | exige login (`/admin/login`) |
+| `/admin` e ações | exige login (`/admin/login`); ações com token anti-CSRF; "Sair" invalida todas as sessões |
+
+## Limites do plano grátis da Groq
+
+Cada modelo tem uma cota diária própria. Quando um modelo estoura, o sistema passa para o próximo da lista
+`LLM_MODEL`. Se todos estourarem, a história volta para a fila e é tentada de novo a cada 15 minutos, sem contar
+como falha. Se ficar adiada por mais de 2 horas, o admin recebe um alerta. Para produzir mais histórias por dia:
+coloque mais modelos em `LLM_MODEL`, desligue a revisão (`LLM_REVIEW=false` gasta metade dos tokens) ou passe
+para o plano pago da Groq (centavos por história).
+
+## Robustez
+
+- O banco (`DATA_DIR/store.json`) é gravado com fsync e mantém a versão anterior em `store.json.bak`. Se o
+  principal estiver corrompido, o site abre pela cópia.
+- E-mails entram numa fila e são reenviados com espera crescente se o Brevo falhar. Problemas aparecem no painel
+  e em `/saude` (`"email":"falhando"`).
+- Uma faxina diária apaga e-mails com mais de 30 dias e pastas de histórias sem registro.
+- Valores inválidos no `.env.site` (ex.: `STORY_INTERVAL_DAYS=0`) usam o padrão e avisam no log.
 
 ## Desenvolvimento
 

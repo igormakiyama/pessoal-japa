@@ -61,7 +61,7 @@ export function previousStories(childId, limit = 6) {
     .filter('stories', (s) => s.childId === childId && s.status === 'ready')
     .sort((a, b) => b.id - a.id)
     .slice(0, limit)
-    .map((s) => ({ title: s.title, summary: s.summary }));
+    .map((s) => ({ title: s.promptTitle ?? s.title, summary: s.promptSummary ?? s.summary }));
 }
 
 function renderAssets(storyId, story, child) {
@@ -102,20 +102,28 @@ export async function produceStory(storyId) {
   });
   console.log(`Gerando história ${storyId} (tema: ${theme})`);
   try {
-    const story = await generateStory(llmChild(child), theme, previousStories(child.id));
+    const { promptTitle = null, promptSummary = null, ...story } = await generateStory(
+      llmChild(child), theme, previousStories(child.id));
+    // Os dados podem ter sido apagados (LGPD) enquanto a IA escrevia: aí não grava nada.
+    if (!store.get('stories', storyId)) {
+      console.log(`História ${storyId} descartada: os dados foram apagados durante a geração.`);
+      return false;
+    }
     const { hasPdf } = renderAssets(storyId, story, child);
     store.update('stories', storyId, {
-      status: 'ready', title: story.titulo, summary: story.resumo, hasPdf, readyAt: nowIso(), error: null, retryAt: null,
+      status: 'ready', title: story.titulo, summary: story.resumo, promptTitle, promptSummary, hasPdf,
+      readyAt: nowIso(), error: null, retryAt: null, deferrals: 0, adminAlerted: false,
     });
     console.log(`História ${storyId} pronta: ${story.titulo}`);
     return true;
   } catch (err) {
+    if (!store.get('stories', storyId)) return false;
     const error = String(err.message || err).slice(0, 1000);
     if (err.retryable) {
       // Limite da IA ou instabilidade passageira: volta para a fila sem gastar tentativa.
       console.warn(`História ${storyId} adiada (${error}); nova tentativa em ${RETRY_DELAY_MINUTES} min.`);
       store.update('stories', storyId, {
-        status: 'queued', attempts: previousAttempts, error,
+        status: 'queued', attempts: previousAttempts, error, deferrals: (row.deferrals || 0) + 1,
         retryAt: new Date(Date.now() + RETRY_DELAY_MINUTES * 60000).toISOString(),
       });
       return false;

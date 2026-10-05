@@ -173,7 +173,7 @@ test('toda cena, de dia e de noite, com várias aparências: IR válido e SVG be
         assert.ok(assertValidIR(ir, 800, 500) > 20, `${scene} tem poucas formas`);
         const svg = toSVG(ir);
         assertWellFormedSVG(svg);
-        assert.ok(svg.includes('viewBox="0 0 800 500" width="800" height="500" role="img"'));
+        assert.ok(svg.includes('viewBox="0 0 800 500" width="800" height="500" aria-hidden="true"'));
         n += 1;
       });
     }

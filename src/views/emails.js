@@ -37,7 +37,7 @@ export function pagamentoConfirmado({ parentName, childName, paidUntil, first, a
   const firstName = String(parentName ?? '').trim().split(/\s+/)[0];
   return layout(subject, html`
 <p>${firstName ? html`Olá, ${firstName}!` : 'Olá!'}</p>
-${first ? html`<p>Pagamento confirmado. A primeira história de <b>${childName}</b> já está sendo escrita, ilustrada e narrada.
+${first ? html`<p>Pagamento confirmado. A primeira história de <b>${childName}</b> já está sendo escrita e ilustrada.
   Ela chega em outro e-mail daqui a alguns minutos.</p>
 <p>Depois disso, chega uma história nova a cada ${config.storyIntervalDays} dias, até ${dateBr(paidUntil)}.</p>`
     : html`<p>Renovação confirmada! As histórias de <b>${childName}</b> continuam chegando até ${dateBr(paidUntil)}.</p>`}
@@ -53,7 +53,7 @@ export function historiaPronta({ childName, title, summary, storyUrl, accountUrl
 <h2 style="color:#5B3E96;margin:8px 0;">${title}</h2>
 <p style="color:#6F6A82;">${summary}</p>
 ${button(storyUrl, 'Ler e ouvir a história')}
-<p style="${NOTE}">Dica: abra no celular na hora de dormir e aperte o play do áudio.
+<p style="${NOTE}">Dica: abra no celular na hora de dormir e toque em “Ouvir a história”.
   Todas as histórias ficam guardadas na <a href="${accountUrl}" style="color:#5B3E96;">sua conta</a>.</p>
 `);
 }

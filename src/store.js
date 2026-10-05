@@ -1,30 +1,54 @@
 // Banco de dados em arquivo JSON dentro de DATA_DIR.
 // Sem dependências nativas (funciona igual em Windows e Linux, em qualquer Node >= 20).
 // Um único processo escreve; cada alteração é gravada na hora com escrita atômica
-// (arquivo temporário + rename), então uma queda não corrompe o banco.
+// (arquivo temporário com fsync + rename) e a versão anterior fica em store.json.bak.
+// Se o arquivo principal estiver vazio ou corrompido, o banco abre pela cópia .bak.
 import fs from 'node:fs';
 import path from 'node:path';
 
-const COLLECTIONS = ['customers', 'children', 'subscriptions', 'orders', 'stories'];
+const COLLECTIONS = ['customers', 'children', 'subscriptions', 'orders', 'stories', 'emails'];
 
 export class Store {
   constructor(file) {
     this.file = file;
+    this.backup = `${file}.bak`;
     this.depth = 0;
     this.data = { seq: {}, kv: {} };
     for (const name of COLLECTIONS) this.data[name] = [];
-    if (fs.existsSync(file)) {
-      Object.assign(this.data, JSON.parse(fs.readFileSync(file, 'utf8')));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const loaded = Store.read(file) ?? Store.read(this.backup);
+    if (loaded) {
+      if (!Store.read(file)) console.error(`Banco principal ilegível; aberto pela cópia ${this.backup}.`);
+      Object.assign(this.data, loaded);
+    } else if (fs.existsSync(file) || fs.existsSync(this.backup)) {
+      throw new Error(`Banco de dados ilegível: ${file} (e a cópia .bak). Restaure um backup da pasta DATA_DIR.`);
     } else {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
       this.save();
+    }
+  }
+
+  // Lê e valida um arquivo do banco; devolve null se não existir ou estiver corrompido.
+  static read(file) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+    } catch {
+      return null;
     }
   }
 
   save() {
     if (this.depth > 0) return;
     const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.data));
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeSync(fd, JSON.stringify(this.data));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    // Se cair entre os dois renames, o construtor abre pela cópia .bak.
+    if (fs.existsSync(this.file)) fs.renameSync(this.file, this.backup);
     fs.renameSync(tmp, this.file);
   }
 

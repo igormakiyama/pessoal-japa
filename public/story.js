@@ -20,7 +20,9 @@
 
   // Frases curtas: alguns navegadores cortam falas longas no meio.
   function sentences(text) {
-    return text.split(/(?<=[.!?…])\s+/).filter(function (s) { return s.trim(); });
+    // Sem lookbehind no regex: iPads antigos (Safari < 16.4) não entendem e o script inteiro pararia.
+    return (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map(function (s) { return s.trim(); })
+      .filter(function (s) { return s; });
   }
 
   function mark(scene) {

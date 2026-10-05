@@ -3,10 +3,19 @@ import path from 'node:path';
 
 export const config = {};
 
-const str = (env, name, fallback = '') => (env[name] ?? fallback).toString().trim();
-const int = (env, name, fallback) => {
+// Valor vazio ("CHAVE=") conta como não definido e usa o padrão.
+const str = (env, name, fallback = '') => (env[name] ?? '').toString().trim() || fallback;
+
+// Número inteiro com mínimo; valor inválido usa o padrão (e avisa no log).
+const int = (env, name, fallback, min = 0) => {
   const value = str(env, name);
-  return value ? parseInt(value, 10) : fallback;
+  if (!value) return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min) {
+    console.warn(`Valor inválido em ${name}=${value}; usando ${fallback}.`);
+    return fallback;
+  }
+  return number;
 };
 const bool = (env, name, fallback) => {
   const value = str(env, name).toLowerCase();
@@ -15,7 +24,7 @@ const bool = (env, name, fallback) => {
 };
 
 export function loadConfig(env = process.env) {
-  const port = int(env, 'PORT', 3000);
+  const port = int(env, 'PORT', 3000, 1);
   const llmApiKey = str(env, 'LLM_API_KEY');
   const brevoApiKey = str(env, 'BREVO_API_KEY');
   let llmProvider = str(env, 'LLM_PROVIDER', 'auto').toLowerCase();
@@ -48,7 +57,7 @@ export function loadConfig(env = process.env) {
     llmModels: str(env, 'LLM_MODEL', 'llama-3.3-70b-versatile,openai/gpt-oss-120b')
       .split(',').map((m) => m.trim()).filter(Boolean),
     llmReview: bool(env, 'LLM_REVIEW', true),
-    llmTimeoutMs: int(env, 'LLM_TIMEOUT_SECONDS', 120) * 1000,
+    llmTimeoutMs: int(env, 'LLM_TIMEOUT_SECONDS', 120, 5) * 1000,
 
     // Pagamento: "fake" (teste: só o admin consegue simular) ou "mercadopago"
     paymentProvider: str(env, 'PAYMENT_PROVIDER', 'fake').toLowerCase(),
@@ -61,13 +70,13 @@ export function loadConfig(env = process.env) {
     emailFrom: str(env, 'EMAIL_FROM', str(env, 'SUPPORT_EMAIL', 'contato@example.com')),
 
     // Produto
-    storyIntervalDays: int(env, 'STORY_INTERVAL_DAYS', 7),
-    renewalReminderDays: int(env, 'RENEWAL_REMINDER_DAYS', 3),
-    workerIntervalMs: int(env, 'WORKER_INTERVAL_SECONDS', 20) * 1000,
+    storyIntervalDays: int(env, 'STORY_INTERVAL_DAYS', 7, 1),
+    renewalReminderDays: int(env, 'RENEWAL_REMINDER_DAYS', 3, 0),
+    workerIntervalMs: int(env, 'WORKER_INTERVAL_SECONDS', 20, 1) * 1000,
     prices: {
-      mensal: int(env, 'PRICE_MENSAL_CENTS', 2490),
-      trimestral: int(env, 'PRICE_TRIMESTRAL_CENTS', 5990),
-      anual: int(env, 'PRICE_ANUAL_CENTS', 19990),
+      mensal: int(env, 'PRICE_MENSAL_CENTS', 2490, 100),
+      trimestral: int(env, 'PRICE_TRIMESTRAL_CENTS', 5990, 100),
+      anual: int(env, 'PRICE_ANUAL_CENTS', 19990, 100),
     },
   });
   return config;

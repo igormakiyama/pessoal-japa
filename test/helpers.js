@@ -78,3 +78,15 @@ export async function adminCookie(base) {
   const res = await postForm(base, '/admin/login', { email: ADMIN.email, password: ADMIN.password, next: '/admin' });
   return res.headers.get('set-cookie').split(';')[0];
 }
+
+// Token anti-CSRF que o painel coloca nos formulários.
+export function csrfFrom(html) {
+  const match = /name="csrf" value="([^"]+)"/.exec(html);
+  return match ? match[1] : '';
+}
+
+// Simula o pagamento de teste como o admin faria no navegador (abre a página e envia o formulário).
+export async function simulatePayment(base, orderToken, cookie) {
+  const page = await (await fetch(`${base}/checkout-teste/${orderToken}`, { headers: { cookie } })).text();
+  return postForm(base, `/checkout-teste/${orderToken}`, { csrf: csrfFrom(page) }, { cookie });
+}

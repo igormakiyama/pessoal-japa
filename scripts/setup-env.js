@@ -30,8 +30,8 @@ if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(adminEmail) || !/^https?:\/\/[^/]+$/.t
 
 const password = () => crypto.randomBytes(18).toString('base64url');
 const values = {
-  NODE_ENV: 'production',
-  SITE_NAME: 'Era Uma Vez Eu',
+  NODE_ENV: existing.NODE_ENV || 'production',
+  SITE_NAME: existing.SITE_NAME || 'Era Uma Vez Eu',
   BASE_URL: baseUrl,
   SUPPORT_EMAIL: args['support-email'] || existing.SUPPORT_EMAIL || adminEmail,
   ADMIN_EMAIL: adminEmail,
@@ -91,6 +91,10 @@ PRICE_TRIMESTRAL_CENTS=${values.PRICE_TRIMESTRAL_CENTS}
 PRICE_ANUAL_CENTS=${values.PRICE_ANUAL_CENTS}
 `;
 
-fs.writeFileSync(file, content, { mode: 0o600 });
+// Variáveis extras que já estavam no arquivo (ex.: LLM_BASE_URL, LLM_REVIEW) são mantidas.
+const extras = Object.entries(existing).filter(([key]) => !Object.hasOwn(values, key));
+const extraBlock = extras.length ? `\n# Outras variáveis\n${extras.map(([k, v]) => `${k}=${v}`).join('\n')}\n` : '';
+
+fs.writeFileSync(file, content + extraBlock, { mode: 0o600 });
 console.log(`.env.site ${Object.keys(existing).length ? 'atualizado' : 'criado'}.`);
 console.log(`Usuário do painel: ${adminEmail} (senha gerada e gravada em .env.site; não exibida).`);
