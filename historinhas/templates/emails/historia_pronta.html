@@ -1,9 +1,0 @@
-{% extends "emails/_base.html" %}
-{% block body %}
-<p>Uma história nova acabou de sair do forno para <b>{{ row.child_name }}</b>:</p>
-<h2 style="color:#5B3E96;margin:8px 0;">{{ row.title }}</h2>
-<p style="color:#6F6A82;">{{ row.summary }}</p>
-{% with url=story_url, label="Ler e ouvir a história" %}{% include "emails/_button.html" %}{% endwith %}
-<p style="font-size:14px;color:#6F6A82;">Dica: abra no celular na hora de dormir e aperte o play do áudio.
-  Todas as histórias ficam guardadas na <a href="{{ account_url }}" style="color:#5B3E96;">sua conta</a>.</p>
-{% endblock %}

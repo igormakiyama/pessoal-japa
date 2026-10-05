@@ -1,8 +1,11 @@
+# Segredos de produção
+.env.site
 .env
+
+# Dados gravados em execução (DATA_DIR local)
 data/
-backups/
-__pycache__/
-*.pyc
-.pytest_cache/
-.venv/
-venv/
+
+node_modules/
+*.tmp
+.DS_Store
+Thumbs.db

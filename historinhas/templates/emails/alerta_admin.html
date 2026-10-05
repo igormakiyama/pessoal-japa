@@ -1,6 +1,0 @@
-{% extends "emails/_base.html" %}
-{% block body %}
-<p>Algumas histórias falharam 3 vezes seguidas e precisam de atenção:</p>
-<ul>{% for r in rows %}<li>História #{{ r.id }}: {{ (r.error or '')[:300] }}</li>{% endfor %}</ul>
-{% with url=admin_url, label="Abrir o painel" %}{% include "emails/_button.html" %}{% endwith %}
-{% endblock %}

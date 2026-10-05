@@ -1,0 +1,17 @@
+{
+  "name": "era-uma-vez-eu",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Histórias infantis personalizadas por assinatura, produzidas e entregues automaticamente.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "setup": "node scripts/setup-env.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

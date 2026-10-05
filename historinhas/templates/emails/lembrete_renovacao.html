@@ -1,9 +1,0 @@
-{% extends "emails/_base.html" %}
-{% block body %}
-<p>Olá!</p>
-<p>O plano de histórias de <b>{{ row.child_name }}</b> vai até <b>{{ row.paid_until|date_br }}</b>.
-  Para as histórias continuarem chegando sem pausa, é só renovar (Pix ou cartão, leva 1 minuto).</p>
-{% with url=account_url, label="Renovar agora" %}{% include "emails/_button.html" %}{% endwith %}
-<p style="font-size:14px;color:#6F6A82;">Não quer renovar? Tudo bem, não cobramos nada automaticamente.
-  As histórias que já chegaram continuam guardadas na sua conta.</p>
-{% endblock %}

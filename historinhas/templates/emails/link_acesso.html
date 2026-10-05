@@ -1,6 +1,0 @@
-{% extends "emails/_base.html" %}
-{% block body %}
-<p>Olá! Aqui está o link para acessar sua conta:</p>
-{% with url=account_url, label="Entrar na minha conta" %}{% include "emails/_button.html" %}{% endwith %}
-<p style="font-size:14px;color:#6F6A82;">Não pediu este link? Pode ignorar este e-mail.</p>
-{% endblock %}
