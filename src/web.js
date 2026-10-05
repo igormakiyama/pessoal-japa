@@ -151,11 +151,17 @@ export function buildRouter() {
 
   r.get('/assinar', ({ res, query }) => {
     const plan = Object.prototype.hasOwnProperty.call(plans(), query.get('plano')) ? query.get('plano') : 'mensal';
-    sendHtml(res, 200, views.signup({ values: { plan, appearance: DEFAULT_APPEARANCE } }));
+    sendHtml(res, 200, views.signup({ values: { plan, appearance: DEFAULT_APPEARANCE }, paused: services.salesBlocked() }));
   });
 
   r.post('/assinar', async ({ req, res }) => {
     const form = await readForm(req);
+    if (services.salesBlocked()) {
+      console.warn(services.salesBlocked());
+      return sendHtml(res, 503, views.message({
+        title: 'Vendas pausadas', text: 'Estamos fazendo ajustes e as novas assinaturas voltam em breve. Nenhum dado foi guardado.',
+      }));
+    }
     const { child, errors } = parseChildForm(form);
     const email = String(form.get('email') || '').trim().toLowerCase().slice(0, 120);
     const parentName = collapseSpaces(form.get('parent_name'), 80);
@@ -271,6 +277,12 @@ export function buildRouter() {
     const sub = db().get('subscriptions', params.subscriptionId);
     if (!sub || sub.customerId !== customer.id || sub.status === 'canceled'
       || !Object.prototype.hasOwnProperty.call(plans(), plan)) return notFound(res);
+    if (services.salesBlocked()) {
+      return sendHtml(res, 503, views.message({
+        title: 'Renovação pausada', text: 'Estamos fazendo ajustes; a renovação volta em breve. Suas histórias continuam guardadas.',
+        link: [`/conta/${params.token}`, 'Voltar para minha conta'],
+      }));
+    }
     try {
       const { url } = await services.createOrder(sub.id, plan);
       return redirect(res, url);
@@ -339,18 +351,18 @@ export function buildRouter() {
   r.post('/entrar', async ({ req, res }) => {
     const form = await readForm(req);
     const email = String(form.get('email') || '').trim().toLowerCase();
-    if (EMAIL_RE.test(email) && !rateLimited(req, 'login-link', 5, 3600000)
-      && !rateLimitedKey(`login-link-email:${email}`, 3, 3600000)) {
-      const customer = services.findCustomerByEmail(email);
-      // Vai para a fila (envio em segundo plano): o tempo de resposta não revela quem é cliente.
-      if (customer) {
-        services.queueEmail('link_acesso', email, `Seu link de acesso - ${config.siteName}`, {
-          accountUrl: `${config.baseUrl}/conta/${customer.token}`,
-        });
-      }
+    const allowed = EMAIL_RE.test(email) && !rateLimited(req, 'login-link', 5, 3600000)
+      && !rateLimitedKey(`login-link-email-ip:${email}:${clientIp(req)}`, 3, 3600000)
+      && !rateLimitedKey(`login-link-email:${email}`, 10, 3600000);
+    const customer = allowed ? services.findCustomerByEmail(email) : null;
+    // Mesma resposta, no mesmo tempo, para todos: o e-mail só entra na fila depois da resposta enviada.
+    sendHtml(res, 200, views.login({ sent: true }));
+    if (customer) {
+      setImmediate(() => services.queueEmail('link_acesso', email, `Seu link de acesso - ${config.siteName}`, {
+        accountUrl: `${config.baseUrl}/conta/${customer.token}`,
+      }));
     }
-    // Mesma resposta sempre, para não revelar quem é cliente.
-    return sendHtml(res, 200, views.login({ sent: true }));
+    return undefined;
   });
 
   // ------------------------------------------------ histórias
@@ -412,7 +424,9 @@ export function buildRouter() {
   });
 
   r.post('/admin/logout', async ({ req, res }) => {
-    if (validCsrf(req, await readForm(req))) revokeAdminSessions();
+    // Admin logado (e a checagem de origem já barrou outros sites): encerra todas as sessões.
+    await readForm(req);
+    if (isAdmin(req)) revokeAdminSessions();
     return redirect(res, '/', 303, { 'Set-Cookie': cookieHeader('adm', '', { maxAge: 0, secure: isHttps(req) }) });
   });
 
@@ -434,6 +448,7 @@ export function buildRouter() {
     if (config.paymentProvider === 'fake') warnings.push('Pagamentos em modo de teste: só você (logado) consegue simular uma compra. Configure o Mercado Pago no .env.site para vender.');
     if (config.paymentProvider === 'mercadopago' && !config.baseUrl.startsWith('https://')) warnings.push('BASE_URL não usa https: o Mercado Pago não consegue enviar os avisos de pagamento.');
     if (config.llmProvider === 'demo') warnings.push('IA em modo demonstração (histórias de modelo fixo). Coloque LLM_API_KEY (Groq) no .env.site.');
+    if (services.salesBlocked()) warnings.push(services.salesBlocked());
     if (config.emailProvider === 'outbox') warnings.push('E-mails não estão sendo enviados (ficam em DATA_DIR/outbox). Coloque BREVO_API_KEY no .env.site.');
     const problems = services.emailProblems();
     if (problems.length) {
@@ -447,7 +462,8 @@ export function buildRouter() {
     if (!requireAdmin(req, res)) return undefined;
     if (!validCsrf(req, await readForm(req))) return forbidden(res);
     db().update('stories', params.storyId, {
-      status: 'queued', attempts: 0, adminAlerted: false, emailedAt: null, error: null, retryAt: null,
+      status: 'queued', attempts: 0, adminAlerted: false, deferralAlerted: false, deferrals: 0, emailedAt: null,
+      error: null, retryAt: null,
     });
     return redirect(res, '/admin');
   });

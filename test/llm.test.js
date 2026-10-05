@@ -508,6 +508,10 @@ test('PRIVACIDADE: diminutivos comuns e acentos raros também viram apelido', ()
     ['Kōji', 'Kōji (com acento separado) e Kōjizinho'],
     ['Ana Clara', 'a Aninha, a Clarinha e a Ana Clara'],
     ['Diego', 'o Dieguinho'],
+    ['Sofia', 'a Sofinha'], ['Júlia', 'a Julinha'], ['Cecília', 'a Cecilinha'], ['Vitória', 'a Vitorinha'],
+    ['Antônio', 'o Antoninho'], ['Sérgio', 'o Serginho'], ['Marcos', 'o Marquinho'], ['Lucas', 'a Luquinha'],
+    ['Carlos', 'o Carlinho e o Carlão'], ['Matheus', 'o Matheuzinho'], ['Pedro', 'o Pedrão'], ['Yūki', 'o Yukinho'],
+    ['Ana', 'a Aninha e a Anita'],
   ];
   for (const [name, text] of cases) {
     const out = hideNames(text, { name, gender: 'menino', pet_name: '' });
@@ -524,4 +528,22 @@ test('PRIVACIDADE: histórias anteriores vão com apelido mesmo depois de trocar
   const prompt = fold(calls.map((c) => c.raw).join(' '));
   assert.ok(prompt.includes('zarik e zuzo na lua'));
   for (const real of ['theo', 'rex', 'bolinha']) assert.ok(!prompt.includes(real), real);
+});
+
+test('PRIVACIDADE: bichinho com nome de palavra do pedido fixo (Neve, Mar, Noite, Gato) não trava a história', async () => {
+  for (const [petName, petType, theme] of [['Neve', 'gato', 'coragem'], ['Mar', 'cachorro', 'amizade'], ['Noite', 'coelho', 'dormir'], ['Gato', 'gato', 'coragem'], ['Coragem', 'cachorro', 'coragem'], ['Menina', 'cachorro', 'coragem']]) {
+    const child = { ...CHILD, gender: 'menina', pet_name: petName, pet_type: petType, interests: ['fundo do mar', 'espaço e foguetes'] };
+    const girlStory = makeStory({ name: ALIASES.menina, title: `${ALIASES.menina} e o Foguete` });
+    mockFetch((body) => (isReview(body) ? completion({ aprovada: true, problemas: [] }) : completion(girlStory)));
+    const story = await generateStory(child, theme, []);
+    assert.ok(story.titulo, petName);
+    assert.ok(calls.length >= 1, `${petName}: nenhum pedido foi enviado`);
+  }
+});
+
+test('PRIVACIDADE: modo demonstração também guarda título e resumo com apelidos', async () => {
+  configure({ LLM_PROVIDER: 'demo', LLM_API_KEY: '' });
+  const story = await generateStory({ ...CHILD, name: 'Theo', pet_name: 'Bolinha', pet_type: 'gato' }, 'coragem', []);
+  assert.ok(story.titulo.includes('Theo'));
+  assert.ok(!fold(story.promptTitle).includes('theo') && !fold(story.promptSummary).includes('bolinha'));
 });

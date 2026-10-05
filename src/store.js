@@ -15,16 +15,29 @@ export class Store {
     this.depth = 0;
     this.data = { seq: {}, kv: {} };
     for (const name of COLLECTIONS) this.data[name] = [];
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const loaded = Store.read(file) ?? Store.read(this.backup);
+    this.tmp = `${file}.tmp`;
+    const dir = path.dirname(file);
+    fs.mkdirSync(dir, { recursive: true });
+    // Ordem: principal; depois o temporário completo (queda entre os dois renames); depois a cópia .bak.
+    const main = Store.read(file);
+    const fromTmp = main ? null : Store.read(this.tmp);
+    const fromBak = main || fromTmp ? null : Store.read(this.backup);
+    const loaded = main ?? fromTmp ?? fromBak;
     if (loaded) {
-      if (!Store.read(file)) console.error(`Banco principal ilegível; aberto pela cópia ${this.backup}.`);
       Object.assign(this.data, loaded);
+      if (!main) {
+        console.error(`Banco principal ilegível; aberto por ${fromTmp ? this.tmp : this.backup}.`);
+        if (fs.existsSync(file)) fs.renameSync(file, `${file}.corrompido-${Date.now()}`);
+      }
     } else if (fs.existsSync(file) || fs.existsSync(this.backup)) {
       throw new Error(`Banco de dados ilegível: ${file} (e a cópia .bak). Restaure um backup da pasta DATA_DIR.`);
-    } else {
-      this.save();
     }
+    // Restos de gravações interrompidas (inclusive de versões antigas, com o PID no nome)
+    const base = path.basename(file);
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith(`${base}.`) && name.endsWith('.tmp')) fs.rmSync(path.join(dir, name), { force: true });
+    }
+    if (!main) this.save();
   }
 
   // Lê e valida um arquivo do banco; devolve null se não existir ou estiver corrompido.
@@ -39,7 +52,7 @@ export class Store {
 
   save() {
     if (this.depth > 0) return;
-    const tmp = `${this.file}.${process.pid}.tmp`;
+    const tmp = this.tmp;
     const fd = fs.openSync(tmp, 'w');
     try {
       fs.writeSync(fd, JSON.stringify(this.data));

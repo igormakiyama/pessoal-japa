@@ -103,26 +103,38 @@ function aliasesFor(child) {
   return { name: free([ALIASES[gender], SPARE_ALIASES[gender]]), pet: free([ALIASES.pet, SPARE_ALIASES.pet]) };
 }
 
-// Diminutivo a partir de um radical: "Marc" -> Marquinho(s); "Dieg" -> Dieguinho; "Pedr" -> Pedrinho.
-function diminutives(stem, plural) {
-  const s = plural ? 's' : 's?';
-  const out = [`${loosePattern(stem)}(?:inh|it)[oa]${s}`];
-  if (/c$/.test(stem)) out.push(`${loosePattern(stem.slice(0, -1))}qu(?:inh|it)[oa]${s}`);
-  if (/g$/.test(stem)) out.push(`${loosePattern(stem)}u(?:inh|it)[oa]${s}`);
-  return out;
+// Radicais do nome, de onde saem os apelidos: Sofia -> sof; Antônio -> anton; Marcos -> marc/marqu;
+// Matheus -> matheu; Pedro -> pedr; Joaquim -> joaquin; Diego -> dieg/diegu.
+function nameStems(folded) {
+  const stems = new Set([folded]);
+  const add = (stem) => {
+    if (stem.length >= 2) stems.add(stem); // "an" de Ana -> Aninha
+  };
+  add(folded.replace(/(?:ia|io|ea|eo|ua|uo)$/, ''));
+  add(folded.replace(/[aeiou]$/, ''));
+  add(folded.replace(/(?:os|as|es|us|is)$/, ''));
+  add(folded.replace(/s$/, ''));
+  add(folded.replace(/m$/, 'n'));
+  for (const stem of [...stems]) {
+    if (/c$/.test(stem)) stems.add(`${stem.slice(0, -1)}qu`);
+    if (/g$/.test(stem)) stems.add(`${stem}u`);
+  }
+  return [...stems];
 }
 
-// Nome real: aceita sem acento, maiúsculas, plural e os diminutivos comuns
-// (Joãozinho, Pedrinho, Aninha, Pipoquinha, Carlinhos, Marquinhos, Luquinhas, Luizinho,
-// Isabelinha, Beatrizinha, Joaquinzinho, Rafaelzinho, Davizinho).
+// Terminações de apelido: -inho/a, -zinho/a, -ito/a, -zito/a, -ucho/a, -ão, -zão, -ões, -ona, plural.
+const NICK_SUFFIX = '(?:z?inh[oa]s?|z?it[oa]s?|uch[oa]s?|z?a\\p{M}*o|z?o\\p{M}*es|z?onas?|s)';
+
+// Nome real: aceita sem acento, maiúsculas, plural, diminutivos e aumentativos
+// (Joãozinho, Sofinha, Antoninho, Marquinho(s), Luquinha, Carlão, Pedrão, Matheuzinho, Joaquinzinho).
 function realNameRegex(term) {
   const folded = fold(term).trim().replace(/\s+/g, ' ');
-  const options = [`${loosePattern(folded)}(?:s|zinh[oa]s?|zit[oa]s?|inh[oa]s?)?`];
-  if (!folded.includes(' ') && folded.length >= 3) {
-    if (/[aeo]$/.test(folded)) options.push(...diminutives(folded.slice(0, -1), false));
-    if (/[ao]s$/.test(folded)) options.push(...diminutives(folded.slice(0, -2), true));
-    if (/m$/.test(folded)) options.push(`${loosePattern(folded.slice(0, -1))}nzinh[oa]s?`);
-  }
+  if (folded.includes(' ')) return bounded(`${loosePattern(folded)}s?`, 'giu');
+  const options = nameStems(folded).map((stem) => {
+    if (stem === folded) return `${loosePattern(stem)}${NICK_SUFFIX}?`;
+    // Radical curto só vale com terminação de apelido de verdade (evita pegar "as", "os"...)
+    return `${loosePattern(stem)}${stem.length < 3 ? NICK_SUFFIX.replace('|s)', ')') : NICK_SUFFIX}`;
+  });
   return bounded(options.join('|'), 'giu');
 }
 
@@ -140,9 +152,10 @@ export function hideNames(text, child) {
   return nfc(out);
 }
 
-// Última barreira antes de enviar: nenhum pedaço do nome real (3+ letras) pode sobrar no pedido.
-function leaksRealName(messages, child) {
-  const body = nfd(messages.map((m) => m.content).join('\n'));
+// Última barreira antes de enviar: nenhum pedaço do nome real (3+ letras) pode sobrar no texto
+// que veio dos pais ou do banco (o texto fixo do pedido não conta: ex. bichinho chamado "Neve").
+function leaksRealName(userText, child) {
+  const body = nfd(userText.join('\n'));
   const tokens = [child.name, child.pet_name].flatMap((n) => nameTokens(n || '')).filter((t) => t.length >= 3);
   const { name, pet } = aliasesFor(child);
   const aliases = new Set([name, pet].map(fold));
@@ -307,9 +320,11 @@ export function buildStoryMessages(child, themeKey, previous = [], feedback = []
   const { name, pet } = aliasesFor(child);
   const [minWords, maxWords] = wordTarget(child.age);
   // Interesses do catálogo vão como estão; qualquer outro texto passa pelo filtro de nomes
+  const freeInterests = (child.interests || []).filter((i) => !INTERESTS.includes(i)).map(hide);
   let interests = (child.interests || []).map((i) => (INTERESTS.includes(i) ? i : hide(i))).join(', ')
     || 'brincar e descobrir coisas novas';
-  if (child.interests_extra) interests += `; os pais contam também: ${maskBrands(hide(child.interests_extra))}`;
+  const extra = child.interests_extra ? maskBrands(hide(child.interests_extra)) : '';
+  if (extra) interests += `; os pais contam também: ${extra}`;
   const themeDesc = Object.hasOwn(THEMES, themeKey) ? THEMES[themeKey][1] : 'uma aventura divertida';
 
   const lines = [
@@ -335,13 +350,15 @@ export function buildStoryMessages(child, themeKey, previous = [], feedback = []
     'Varie os cenários: no máximo duas cenas no mesmo cenário.',
     'Use "noite": true quando a cena se passa à noite.',
   );
-  if (previous && previous.length) {
-    lines.push('', 'Histórias anteriores desta criança (NÃO repita enredos nem títulos):');
-    lines.push(...previous.map((p) => `- ${hide(p.title)}: ${hide(p.summary)}`));
+  // Tudo o que veio dos pais ou do banco (passa pela barreira de privacidade antes do envio)
+  const previousLines = (previous || []).map((p) => `- ${hide(p.title)}: ${hide(p.summary)}`);
+  const feedbackLines = (feedback || []).map((f) => `- ${hide(f)}`);
+  const userText = [extra, ...freeInterests, ...previousLines, ...feedbackLines];
+  if (previousLines.length) {
+    lines.push('', 'Histórias anteriores desta criança (NÃO repita enredos nem títulos):', ...previousLines);
   }
-  if (feedback && feedback.length) {
-    lines.push('', 'Uma versão anterior foi reprovada. Corrija estes problemas:');
-    lines.push(...feedback.map((f) => `- ${hide(f)}`));
+  if (feedbackLines.length) {
+    lines.push('', 'Uma versão anterior foi reprovada. Corrija estes problemas:', ...feedbackLines);
   }
   lines.push(
     '',
@@ -351,7 +368,9 @@ export function buildStoryMessages(child, themeKey, previous = [], feedback = []
   );
   const system = 'Você é um autor premiado de histórias infantis brasileiras. Escreve em português do Brasil correto, '
     + 'com carinho, humor e imaginação. Responde somente com JSON válido.';
-  return [{ role: 'system', content: system }, { role: 'user', content: lines.join('\n') }];
+  const messages = [{ role: 'system', content: system }, { role: 'user', content: lines.join('\n') }];
+  Object.defineProperty(messages, 'userText', { value: userText }); // não vai no JSON enviado
+  return messages;
 }
 
 // ---------------------------------------------------------------- validação
@@ -462,7 +481,7 @@ export async function reviewStory(story, child) {
         + `TÍTULO: ${hide(story.titulo)}\n\n${hide(storyText(story))}`,
     },
   ];
-  if (leaksRealName(messages, child)) throw new LLMError(PRIVACY_BLOCK);
+  if (leaksRealName([hide(story.titulo), hide(storyText(story))], child)) throw new LLMError(PRIVACY_BLOCK);
   const result = await chatJSON(messages, { temperature: 0.1 });
   const list = Array.isArray(result.problemas) ? result.problemas : [result.problemas].filter(Boolean);
   const problems = list.map((p) => String(p ?? '').trim()).filter(Boolean);
@@ -479,7 +498,7 @@ export async function generateStory(child, themeKey, previous = []) {
   if (config.llmProvider === 'demo') {
     const { story, problems } = validateStory(demoStory(child, themeKey), child);
     if (problems.length) throw new StoryGenerationError(problems.join('; '));
-    return story;
+    return { ...story, promptTitle: hideNames(story.titulo, child), promptSummary: hideNames(story.resumo, child) };
   }
 
   const masked = aliasChild(child);
@@ -489,7 +508,7 @@ export async function generateStory(child, themeKey, previous = []) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     let data;
     const messages = buildStoryMessages(child, themeKey, previous, feedback);
-    if (leaksRealName(messages, child)) throw new StoryGenerationError(PRIVACY_BLOCK);
+    if (leaksRealName(messages.userText, child)) throw new StoryGenerationError(PRIVACY_BLOCK);
     try {
       data = await chatJSON(messages);
     } catch (err) {

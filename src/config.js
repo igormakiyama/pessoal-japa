@@ -6,12 +6,12 @@ export const config = {};
 // Valor vazio ("CHAVE=") conta como não definido e usa o padrão.
 const str = (env, name, fallback = '') => (env[name] ?? '').toString().trim() || fallback;
 
-// Número inteiro com mínimo; valor inválido usa o padrão (e avisa no log).
-const int = (env, name, fallback, min = 0) => {
+// Número inteiro dentro da faixa; valor inválido usa o padrão (e avisa no log).
+const int = (env, name, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) => {
   const value = str(env, name);
   if (!value) return fallback;
   const number = Number(value);
-  if (!Number.isInteger(number) || number < min) {
+  if (!Number.isInteger(number) || number < min || number > max) {
     console.warn(`Valor inválido em ${name}=${value}; usando ${fallback}.`);
     return fallback;
   }
@@ -24,7 +24,7 @@ const bool = (env, name, fallback) => {
 };
 
 export function loadConfig(env = process.env) {
-  const port = int(env, 'PORT', 3000, 1);
+  const port = int(env, 'PORT', 3000, 1, 65535);
   const llmApiKey = str(env, 'LLM_API_KEY');
   const brevoApiKey = str(env, 'BREVO_API_KEY');
   let llmProvider = str(env, 'LLM_PROVIDER', 'auto').toLowerCase();

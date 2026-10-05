@@ -96,10 +96,20 @@ test('história presa em "gerando" volta para a fila; falha tenta de novo até 3
   assert.equal(store.get('stories', c.id).status, 'failed');
 });
 
-test('com Mercado Pago ligado e IA em demonstração, as vendas ficam bloqueadas', async () => {
+test('com Mercado Pago ligado e IA em demonstração, as vendas ficam pausadas sem guardar dados', async () => {
   setup({ PAYMENT_PROVIDER: 'mercadopago', MP_ACCESS_TOKEN: 'TEST-123' });
   const { subscription } = services.createSignup('mp@example.com', 'Maria', CHILD);
   await assert.rejects(services.createOrder(subscription.id, 'mensal'), /modo demonstração/);
+  const srv = await startServer();
+  try {
+    const before = db().all('children').length;
+    assert.ok((await (await realFetch(`${srv.base}/assinar`)).text()).includes('pausadas'));
+    const res = await postForm(srv.base, '/assinar', { child_name: 'Theo', age: '5', email: 'x@y.com', parent_name: 'Pai', plan: 'mensal', consent: '1' });
+    assert.equal(res.status, 503);
+    assert.equal(db().all('children').length, before);
+  } finally {
+    await srv.close();
+  }
 });
 
 test('webhook do Mercado Pago reconsulta o pagamento na API (corpo forjado não vale)', async () => {

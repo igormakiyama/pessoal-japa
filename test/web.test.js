@@ -145,6 +145,18 @@ test('editar criança, renovar e apagar dados', async () => {
   assert.match(db().get('customers', customer.id).email, /^apagado-/);
 });
 
+test('limite de links de acesso é por e-mail e IP: outro IP não bloqueia o cliente', async () => {
+  const customer = db().find('customers', (c) => c.email === 'mae@example.com');
+  const count = () => db().all('emails').filter((e) => e.template === 'link_acesso' && e.to === customer.email).length;
+  const before = count();
+  for (let i = 0; i < 4; i += 1) {
+    await postForm(base, '/entrar', { email: customer.email }, { 'x-forwarded-for': '203.0.113.66' });
+  }
+  await postForm(base, '/entrar', { email: customer.email }, { 'x-forwarded-for': '198.51.100.200' });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(count() - before, 4); // 3 do primeiro IP (o 4º foi barrado) + 1 do cliente
+});
+
 test('link de acesso por e-mail não revela quem é cliente', async () => {
   const customer = db().find('customers', (c) => c.email === 'mae@example.com');
   const res = await postForm(base, '/entrar', { email: 'mae@example.com' });
@@ -180,6 +192,12 @@ test('painel exige login e recusa senha errada', async () => {
     const evil = await postForm(base, '/admin/login', { email: ADMIN.email, password: ADMIN.password, next });
     assert.equal(evil.headers.get('location'), '/admin', next);
   }
+  // "Sair" a partir de uma aba antiga (token anti-CSRF velho) também encerra todas as sessões
+  const tabA = await adminCookie(base);
+  const oldPage = await (await fetch(base + '/admin', { headers: { cookie: tabA } })).text();
+  const tabB = await adminCookie(base);
+  await postForm(base, '/admin/logout', { csrf: csrfFrom(oldPage) }, { cookie: tabB });
+  for (const c of [tabA, tabB]) assert.equal((await fetch(base + '/admin', { redirect: 'manual', headers: { cookie: c } })).status, 303);
   // Sair invalida a sessão mesmo que alguém tenha copiado o cookie
   const copied = await adminCookie(base);
   const page = await (await fetch(base + '/admin', { headers: { cookie: copied } })).text();

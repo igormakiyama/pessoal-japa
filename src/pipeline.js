@@ -58,10 +58,11 @@ export function pickTheme(child) {
 
 export function previousStories(childId, limit = 6) {
   return db()
-    .filter('stories', (s) => s.childId === childId && s.status === 'ready')
+    // Só a versão com apelidos vai para a IA; história sem ela (ex.: muito antiga) fica de fora.
+    .filter('stories', (s) => s.childId === childId && s.status === 'ready' && s.promptTitle)
     .sort((a, b) => b.id - a.id)
     .slice(0, limit)
-    .map((s) => ({ title: s.promptTitle ?? s.title, summary: s.promptSummary ?? s.summary }));
+    .map((s) => ({ title: s.promptTitle, summary: s.promptSummary || '' }));
 }
 
 function renderAssets(storyId, story, child) {
@@ -112,7 +113,7 @@ export async function produceStory(storyId) {
     const { hasPdf } = renderAssets(storyId, story, child);
     store.update('stories', storyId, {
       status: 'ready', title: story.titulo, summary: story.resumo, promptTitle, promptSummary, hasPdf,
-      readyAt: nowIso(), error: null, retryAt: null, deferrals: 0, adminAlerted: false,
+      readyAt: nowIso(), error: null, retryAt: null, deferrals: 0, adminAlerted: false, deferralAlerted: false,
     });
     console.log(`História ${storyId} pronta: ${story.titulo}`);
     return true;

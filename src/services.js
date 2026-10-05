@@ -36,10 +36,15 @@ async function deliverDue(limit) {
     .sort((a, b) => a.id - b.id).slice(0, limit);
   let sent = 0;
   for (const email of due) {
+    // Pode ter sido apagado (LGPD) ou já enviado enquanto este lote rodava
+    const current = store.get('emails', email.id);
+    if (!current || current.status !== 'pending') continue;
     try {
       await sendTemplate(email.template, email.to, email.subject, email.ctx);
+      if (!store.get('emails', email.id)) continue;
       store.update('emails', email.id, { status: 'sent', sentAt: nowIso(), lastError: null });
       sent += 1;
+      if (current.attempts > 0 || store.find('emails', (e) => e.status === 'failed')) reviveEmails();
     } catch (err) {
       const attempts = email.attempts + 1;
       const giveUp = attempts >= EMAIL_MAX_ATTEMPTS;
@@ -74,9 +79,40 @@ export function deliverPendingEmails(limit = 20) {
   return deliveryRun;
 }
 
-// E-mails com problema: falharam de vez ou já erraram 3 vezes seguidas.
+// O envio voltou a funcionar: tenta já os que estavam esperando e ressuscita os que desistiram na última semana.
+function reviveEmails() {
+  const store = db();
+  const weekAgo = plusDays(-7);
+  const now = nowIso();
+  let changed = false;
+  for (const e of store.all('emails')) {
+    if (e.status === 'pending' && e.attempts > 0 && e.nextAttemptAt > now) {
+      e.nextAttemptAt = now;
+      changed = true;
+    } else if (e.status === 'failed' && e.createdAt > weekAgo) {
+      Object.assign(e, { status: 'pending', attempts: 0, nextAttemptAt: now });
+      changed = true;
+    }
+  }
+  if (changed) {
+    store.save();
+    rerun = true;
+  }
+}
+
+// E-mails com problema agora: ainda tentando depois de 3 erros, ou que desistiram na última semana.
 export function emailProblems() {
-  return db().filter('emails', (e) => e.status === 'failed' || (e.status === 'pending' && e.attempts >= 3));
+  const weekAgo = plusDays(-7);
+  return db().filter('emails', (e) => (e.status === 'pending' && e.attempts >= 3)
+    || (e.status === 'failed' && e.createdAt > weekAgo));
+}
+
+// Motivo para não vender agora (ou null): Mercado Pago ligado com a IA ainda em demonstração.
+export function salesBlocked() {
+  if (config.paymentProvider === 'mercadopago' && config.llmProvider === 'demo') {
+    return 'Vendas pausadas: a IA está em modo demonstração (falta LLM_API_KEY no .env.site).';
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- cadastro e pedidos
@@ -117,9 +153,7 @@ export function updateChild(childId, child) {
 export async function createOrder(subscriptionId, planKey) {
   const store = db();
   const plan = plans()[planKey];
-  if (config.paymentProvider === 'mercadopago' && config.llmProvider === 'demo') {
-    throw new PaymentError('Vendas bloqueadas: a IA está em modo demonstração (falta LLM_API_KEY no .env.site).');
-  }
+  if (salesBlocked()) throw new PaymentError(salesBlocked());
   const subscription = store.get('subscriptions', subscriptionId);
   const customer = store.get('customers', subscription.customerId);
   const order = store.insert('orders', {
@@ -201,7 +235,17 @@ export function applyPaymentSync(orderToken, paymentId, status, amountCents) {
   }
 
   if (status === 'approved' && order.status === 'approved' && paymentId !== order.paymentId) {
-    console.warn(`Pagamento duplicado ${paymentId} para o pedido ${orderToken} (já pago por ${order.paymentId}). Considere estornar.`);
+    const duplicates = order.duplicatePayments || [];
+    if (!duplicates.includes(paymentId)) {
+      console.warn(`Pagamento duplicado ${paymentId} para o pedido ${orderToken} (já pago por ${order.paymentId}).`);
+      store.update('orders', order.id, { duplicatePayments: [...duplicates, paymentId] });
+      if (config.adminEmail) {
+        queueEmail('alerta_admin', config.adminEmail, `[${config.siteName}] Pagamento em duplicidade`, {
+          rows: [{ id: order.id, error: `Pedido ${order.id} foi pago duas vezes (pagamentos ${order.paymentId} e ${paymentId}). Estorne o ${paymentId} no Mercado Pago.` }],
+          adminUrl: `${config.baseUrl}/admin`,
+        });
+      }
+    }
     return { outcome: 'duplicate' };
   }
 
@@ -326,15 +370,21 @@ export const MAX_DEFERRALS = 8;
 
 export function alertAdminFailures() {
   const store = db();
-  const rows = store.filter('stories', (s) => !s.adminAlerted
-    && ((s.status === 'failed' && s.attempts >= 3) || (s.status === 'queued' && (s.deferrals || 0) >= MAX_DEFERRALS)));
+  // Dois avisos diferentes: falha definitiva (adminAlerted) e história adiada há muito tempo (deferralAlerted).
+  const failed = store.filter('stories', (s) => s.status === 'failed' && s.attempts >= 3 && !s.adminAlerted);
+  const deferred = store.filter('stories', (s) => s.status === 'queued' && (s.deferrals || 0) >= MAX_DEFERRALS
+    && !s.deferralAlerted);
+  const rows = [...failed, ...deferred];
   if (!rows.length) return;
   if (config.adminEmail) {
     queueEmail('alerta_admin', config.adminEmail, `[${config.siteName}] ${rows.length} história(s) falharam`, {
       rows: rows.map((r) => ({ id: r.id, error: r.error })), adminUrl: `${config.baseUrl}/admin`,
     });
   }
-  store.transaction(() => rows.forEach((r) => { r.adminAlerted = true; }));
+  store.transaction(() => {
+    failed.forEach((r) => { r.adminAlerted = true; });
+    deferred.forEach((r) => { r.deferralAlerted = true; });
+  });
 }
 
 export function expireAndRemind() {

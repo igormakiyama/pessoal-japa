@@ -261,7 +261,7 @@ export function childFields(values) {
 </div>`;
 }
 
-export function signup({ values, errors = [] }) {
+export function signup({ values, errors = [], paused = null }) {
   return layout({
     title: 'Assinar',
     scripts: ['/static/form.js?v=3'],
@@ -273,6 +273,7 @@ export function signup({ values, errors = [] }) {
   </div>
   ${errorsBox(errors)}
   ${config.paymentProvider === 'fake' ? html`<div class="notice">Este site está em fase de testes: os pagamentos ainda não estão liberados.</div>` : ''}
+  ${paused ? html`<div class="errors">As novas assinaturas estão pausadas por alguns instantes. Volte em breve!</div>` : ''}
   <form method="post" action="/assinar" data-avatar>
     ${childFields(values)}
     <div class="card">
@@ -353,7 +354,12 @@ export function fakeCheckout({ order, plan, admin, csrf }) {
 
 export function thanks({ order }) {
   let body;
-  if (order.status === 'approved') {
+  if (order.status === 'canceled' || order.note) {
+    body = html`<h1>Pedido cancelado</h1>
+      <p>Os dados desta conta foram apagados a pedido do responsável, então este pedido não vale mais.
+        Se algum valor foi pago, ele será devolvido integralmente.</p>
+      <p class="hint">Dúvidas: <a href="mailto:${config.supportEmail}">${config.supportEmail}</a></p>`;
+  } else if (order.status === 'approved') {
     body = html`<h1>Pagamento confirmado! 🎉</h1>
       <p>As histórias de <b>${order.childName}</b> estão garantidas. Se esta é a primeira compra, a primeira
         história já está sendo escrita e ilustrada e chega no seu e-mail em alguns minutos.</p>
@@ -630,7 +636,8 @@ export function admin({ stats, subs, stories, orders, warnings, csrf }) {
     <div class="table-wrap"><table>
       <tr><th>#</th><th>E-mail</th><th>Plano</th><th>Valor</th><th>Status</th><th>Pagamento</th><th>Data</th></tr>
       ${orders.map((o) => html`<tr><td>${o.id}</td><td>${o.email}</td><td>${o.plan}</td><td>${brl(o.amountCents)}</td>
-        <td>${o.status}</td><td>${o.paymentId || '—'}</td><td>${dateBr(o.createdAt)}</td></tr>`)}
+        <td>${o.status}${o.note ? html`<br><small class="err">${o.note}</small>` : ''}${(o.duplicatePayments || []).length ? html`<br><small class="err">pago em duplicidade: ${o.duplicatePayments.join(', ')} (estornar)</small>` : ''}</td>
+        <td>${o.paymentId || '—'}</td><td>${dateBr(o.createdAt)}</td></tr>`)}
     </table></div>
   </div>
 </div>`,

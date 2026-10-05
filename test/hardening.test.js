@@ -183,7 +183,78 @@ test('história adiada muitas vezes pelo limite da IA gera alerta para o admin',
   setup();
   const story = db().insert('stories', { token: 't', subscriptionId: 1, childId: 1, status: 'queued', attempts: 0, deferrals: 8, error: 'HTTP 429', adminAlerted: false });
   services.alertAdminFailures();
+  assert.equal(db().get('stories', story.id).deferralAlerted, true);
+  // Se depois falhar de vez, o admin recebe um segundo aviso (falha definitiva)
+  db().update('stories', story.id, { status: 'failed', attempts: 3 });
+  services.alertAdminFailures();
   assert.equal(db().get('stories', story.id).adminAlerted, true);
   await services.deliverPendingEmails();
   assert.ok(db().all('emails').some((e) => e.template === 'alerta_admin'));
+});
+
+test('banco: queda entre os dois renames abre pelo temporário; restos e arquivo corrompido não ficam no caminho', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'store-'));
+  const file = path.join(dir, 'store.json');
+  const store = new Store(file);
+  store.insert('customers', { email: 'a@b.com' });
+  // Simula a queda: principal já virou .bak e o temporário completo ainda não foi renomeado
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ...store.data, customers: [...store.data.customers, { id: 2, email: 'c@d.com' }] }));
+  fs.renameSync(file, `${file}.bak`);
+  fs.writeFileSync(`${file}.12345.tmp`, 'resto de versão antiga');
+  const reopened = new Store(file);
+  assert.equal(reopened.all('customers').length, 2);
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), []);
+  reopened.insert('customers', { email: 'e@f.com' }); // agora o .bak guarda a versão com 2 clientes
+  fs.writeFileSync(file, '{quebrado');
+  const again = new Store(file);
+  assert.equal(again.all('customers').length, 2);
+  assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('store.json.corrompido-')));
+  assert.ok(Store.read(`${file}.bak`), 'a cópia boa não pode ser sobrescrita pelo arquivo corrompido');
+});
+
+test('PORT fora da faixa usa o padrão em vez de derrubar o processo', () => {
+  loadConfig({ PORT: '70000' });
+  assert.equal(config.port, 3000);
+});
+
+test('pagamento duplicado fica registrado no pedido e avisa o admin', async () => {
+  const { order } = await paidSubscription();
+  await services.applyPayment(order.token, '222', 'approved', 2490);
+  await services.applyPayment(order.token, '222', 'approved', 2490);
+  assert.deepEqual(db().get('orders', order.id).duplicatePayments, ['222']);
+  await services.deliverPendingEmails();
+  assert.equal(db().all('emails').filter((e) => e.template === 'alerta_admin').length, 1);
+});
+
+test('e-mails: quando o Brevo volta, os que desistiram e os que esperavam saem logo', async () => {
+  setup({ EMAIL_PROVIDER: 'brevo', BREVO_API_KEY: 'x' });
+  const failedOld = db().insert('emails', { template: 'link_acesso', to: 'a@b.com', subject: 'A', ctx: { accountUrl: 'u' }, status: 'failed', attempts: 8, nextAttemptAt: new Date().toISOString(), createdAt: new Date().toISOString() });
+  const waiting = db().insert('emails', { template: 'link_acesso', to: 'c@d.com', subject: 'B', ctx: { accountUrl: 'u' }, status: 'pending', attempts: 5, nextAttemptAt: new Date(Date.now() + 6 * 3600000).toISOString(), createdAt: new Date().toISOString() });
+  assert.equal(services.emailProblems().length, 2);
+  const sentTo = [];
+  globalThis.fetch = async (url, init) => {
+    sentTo.push(JSON.parse(init.body).to[0].email);
+    return new Response('{}', { status: 201 });
+  };
+  services.queueEmail('link_acesso', 'e@f.com', 'C', { accountUrl: 'u' });
+  await services.deliverPendingEmails();
+  assert.deepEqual(sentTo.sort(), ['a@b.com', 'c@d.com', 'e@f.com']);
+  assert.equal(db().get('emails', failedOld.id).status, 'sent');
+  assert.equal(db().get('emails', waiting.id).status, 'sent');
+  assert.equal(services.emailProblems().length, 0);
+});
+
+test('LGPD: apagar os dados no meio de um lote de e-mails impede os envios que faltavam', async () => {
+  setup({ EMAIL_PROVIDER: 'brevo', BREVO_API_KEY: 'x' });
+  const { customer } = services.createSignup('mae@example.com', 'Ana', CHILD);
+  db().insert('emails', { template: 'link_acesso', to: 'outro@example.com', subject: 'A', ctx: { accountUrl: 'u' }, status: 'pending', attempts: 0, nextAttemptAt: new Date(0).toISOString(), createdAt: new Date().toISOString() });
+  db().insert('emails', { template: 'link_acesso', to: 'mae@example.com', subject: 'B', ctx: { accountUrl: 'u' }, status: 'pending', attempts: 0, nextAttemptAt: new Date(0).toISOString(), createdAt: new Date().toISOString() });
+  const sentTo = [];
+  globalThis.fetch = async (url, init) => {
+    sentTo.push(JSON.parse(init.body).to[0].email);
+    services.deleteCustomerData(customer.id); // o responsável apaga tudo enquanto o primeiro e-mail sai
+    return new Response('{}', { status: 201 });
+  };
+  await services.deliverPendingEmails();
+  assert.deepEqual(sentTo, ['outro@example.com']);
 });
